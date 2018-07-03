@@ -18,6 +18,7 @@
 
 #include <paho_mqtt_c/MQTTESP8266.h>
 #include <paho_mqtt_c/MQTTClient.h>
+#include "colorLed.h"
 
 #define MQTT_HOST ("192.168.1.110")
 #define MQTT_PORT 1883
@@ -70,6 +71,28 @@ static void topic_received(mqtt_message_data_t *md)
         printf("%c", ((char *)(message->payload))[i]);
 
     printf("\r\n");
+
+    if ((int)message->payloadlen == 8) {
+        if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '1') //Setting LED
+        {
+            printf("Setting LED command ");
+            char r[3] = "00\0";
+            char g[3] = "00\0";
+            char b[3] = "00\0";
+            r[0] = ((char *)(message->payload))[2]; r[1] = ((char *)(message->payload))[3]; 
+            g[0] = ((char *)(message->payload))[4]; g[1] = ((char *)(message->payload))[5]; 
+            b[0] = ((char *)(message->payload))[6]; b[1] = ((char *)(message->payload))[7]; 
+            uint8_t r_val = (uint8_t) strtol(r, NULL, 16);
+            uint8_t g_val = (uint8_t) strtol(g, NULL, 16);
+            uint8_t b_val = (uint8_t) strtol(b, NULL, 16);
+            
+            printf("r : %d g: %d b: %d \r\n", r_val, g_val, b_val);
+            set_led(r_val, g_val, b_val);
+        }
+    }
+    if ((int)message->payloadlen == 5) {
+        sdk_system_deep_sleep(10*1000*1000);
+    }
 }
 
 static const char *  get_my_id(void)
@@ -103,10 +126,11 @@ void user_init(void)
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
     vSemaphoreCreateBinary(wifi_alive);
     publish_queue = xQueueCreate(3, PUB_MSG_LEN);
+    init_led();
     xTaskCreate(&wifi_task, "wifi_task", 256, NULL, 2, NULL);
     xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
     xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
-    //xTaskCreate(&httpd_task, "http_server", 1024, NULL, 2, NULL);
+    //xTaskCreate(&blinkTest, "blink_task", 1024, NULL, 5, NULL);
 }
 
 
@@ -234,6 +258,7 @@ static void wifi_task(void *pvParameters)
         }
         if (status == STATION_GOT_IP) {
             printf("WiFi: Connected\n\r");
+            //sdk_wifi_set_sleep_type(WIFI_SLEEP_LIGHT);
             xSemaphoreGive( wifi_alive );
             taskYIELD();
         }
