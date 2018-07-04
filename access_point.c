@@ -15,7 +15,6 @@
 #include <httpd/httpd.h>
 #include <lwip/api.h>
 #include "smartConfig.h"
-
 #include <paho_mqtt_c/MQTTESP8266.h>
 #include <paho_mqtt_c/MQTTClient.h>
 #include "colorLed.h"
@@ -37,12 +36,79 @@ static void wifi_task(void *pvParameters);
 
 static void beat_task(void *pvParameters);
 static void mqtt_task(void *pvParameters);
+static void buttonIntTask(void *pvParameters);
 
 SemaphoreHandle_t wifi_alive;
 QueueHandle_t publish_queue;
 bool isWifiConnected = false;
 
-static void  beat_task(void *pvParameters)
+const int gpio = 14;   /* gpio 0 usually has "PROGRAM" button attached */
+const int active = 0; /* active == 0 for active low */
+const gpio_inttype_t int_type = GPIO_INTTYPE_EDGE_NEG;
+
+static QueueHandle_t tsqueue;
+
+void gpio_intr_handler(uint8_t gpio_num);
+
+void gpio_init(void) 
+{
+    gpio_enable(gpio, GPIO_INPUT);
+    tsqueue = xQueueCreate(2, sizeof(uint32_t));
+}
+
+void gpio_intr_handler(uint8_t gpio_num)
+{
+    uint32_t now = xTaskGetTickCountFromISR();
+    xQueueSendToBackFromISR(tsqueue, &now, NULL);
+}
+
+void buttonIntTask(void *pvParameters)
+{
+    printf("Waiting for button press interrupt on gpio %d.......\r\n", gpio);
+    QueueHandle_t *tsqueue = (QueueHandle_t *)pvParameters;
+    printf("1\r\n");
+    gpio_set_interrupt(gpio, int_type, gpio_intr_handler);
+
+    printf("2\r\n");
+    uint32_t last = 0;
+    while (1) {
+        uint32_t button_ts;
+        xQueueReceive(*tsqueue, &button_ts, portMAX_DELAY);
+        button_ts *= portTICK_PERIOD_MS;
+        if(last < button_ts-200) {
+            printf("Button interrupt fired at %dms\r\n", button_ts);
+            uint32_t delay = button_ts - last;
+            printf("Button pressed for %dms\r\n", delay);
+            last = button_ts;
+        }
+    }
+}
+
+void buttonPollTask(void *pvParameters)
+{
+    printf("Polling for button press on gpio %d...\r\n", gpio);
+    bool isPrevPressed = false;
+    uint32_t count = 0;
+    while(1) {
+        if(gpio_read(gpio) == active)
+        {
+            if (isPrevPressed) {
+                count++;
+            }
+            isPrevPressed = true;
+        } else {
+            isPrevPressed = false;
+            count = 0;
+        }
+        if (count > 5*10)
+        {
+            printf("Sleep....Polled for button press at %d\r\n", count);
+        }
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+    }
+}
+
+static void beat_task(void *pvParameters)
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     char msg[PUB_MSG_LEN];
@@ -119,20 +185,6 @@ static const char *  get_my_id(void)
     my_id_done = true;
     return my_id;
 }
-
-void user_init(void)
-{
-    uart_set_baud(0, 115200);
-    printf("SDK version:%s\n", sdk_system_get_sdk_version());
-    vSemaphoreCreateBinary(wifi_alive);
-    publish_queue = xQueueCreate(3, PUB_MSG_LEN);
-    init_led();
-    xTaskCreate(&wifi_task, "wifi_task", 256, NULL, 2, NULL);
-    xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
-    xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
-    //xTaskCreate(&blinkTest, "blink_task", 1024, NULL, 5, NULL);
-}
-
 
 static void  mqtt_task(void *pvParameters)
 {
@@ -259,6 +311,7 @@ static void wifi_task(void *pvParameters)
         if (status == STATION_GOT_IP) {
             printf("WiFi: Connected\n\r");
             //sdk_wifi_set_sleep_type(WIFI_SLEEP_LIGHT);
+            sdk_wifi_set_sleep_type(WIFI_SLEEP_LIGHT);
             xSemaphoreGive( wifi_alive );
             taskYIELD();
         }
@@ -313,5 +366,21 @@ static void httpd_task(void *pvParameters)
         netconn_close(client);
         netconn_delete(client);
     }
+}
+
+void user_init(void)
+{
+    uart_set_baud(0, 115200);
+    printf("SDK version:%s\n", sdk_system_get_sdk_version());
+    vSemaphoreCreateBinary(wifi_alive);
+    publish_queue = xQueueCreate(3, PUB_MSG_LEN);
+    init_led();
+    gpio_init();
+    xTaskCreate(&wifi_task, "wifi_task", 256, NULL, 2, NULL);
+    xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
+    xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
+    //xTaskCreate(&buttonIntTask, "buttonIntTask", 256, &tsqueue, 2, NULL);
+    xTaskCreate(&buttonPollTask, "buttonPollTask", 256, NULL, 2, NULL);
+    //xTaskCreate(&blinkTest, "blink_task", 1024, NULL, 5, NULL);
 }
 
