@@ -31,22 +31,49 @@
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
 
-static void httpd_task(void *pvParameters);
 static void wifi_task(void *pvParameters);
 
 static void beat_task(void *pvParameters);
+static void ap_task(void *pvParameters);
 static void mqtt_task(void *pvParameters);
 static void buttonIntTask(void *pvParameters);
 
 SemaphoreHandle_t wifi_alive;
 QueueHandle_t publish_queue;
-bool isWifiConnected = false;
 
 const int gpio = 14;   /* gpio 0 usually has "PROGRAM" button attached */
 const int active = 0; /* active == 0 for active low */
 const gpio_inttype_t int_type = GPIO_INTTYPE_EDGE_NEG;
 
+
+static const char * const auth_modes [] = {
+    [AUTH_OPEN]         = "Open",
+    [AUTH_WEP]          = "WEP",
+    [AUTH_WPA_PSK]      = "WPA/PSK",
+    [AUTH_WPA2_PSK]     = "WPA2/PSK",
+    [AUTH_WPA_WPA2_PSK] = "WPA/WPA2/PSK"
+};
+
 static QueueHandle_t tsqueue;
+
+//WiFi access point data
+typedef struct {
+    char ssid[32];
+    char bssid[8];
+    int channel;
+    char rssi;
+    char enc;
+} ApData;
+
+//Scan result
+typedef struct {
+    char scanInProgress; //if 1, don't access the underlying stuff from the webpage.
+    ApData **apData;
+    int noAps;
+} ScanResultData;
+
+//Static scan status storage.
+static ScanResultData cgiWifiAps;
 
 void gpio_intr_handler(uint8_t gpio_num);
 
@@ -66,10 +93,7 @@ void buttonIntTask(void *pvParameters)
 {
     printf("Waiting for button press interrupt on gpio %d.......\r\n", gpio);
     QueueHandle_t *tsqueue = (QueueHandle_t *)pvParameters;
-    printf("1\r\n");
     gpio_set_interrupt(gpio, int_type, gpio_intr_handler);
-
-    printf("2\r\n");
     uint32_t last = 0;
     while (1) {
         uint32_t button_ts;
@@ -157,7 +181,14 @@ static void topic_received(mqtt_message_data_t *md)
         }
     }
     if ((int)message->payloadlen == 5) {
-        sdk_system_deep_sleep(10*1000*1000);
+        if (((char *)(message->payload))[0] == 's' && ((char *)(message->payload))[1] == 'l' &&
+            ((char *)(message->payload))[2] == 'e' && ((char *)(message->payload))[3] == 'e' &&
+            ((char *)(message->payload))[4] == 'p')
+        { 
+            sdk_system_deep_sleep(10*1000*1000);
+        }
+    } else if ((int)message->payloadlen == 6) {
+        close_led();
     }
 }
 
@@ -258,8 +289,10 @@ static void  mqtt_task(void *pvParameters)
             if (ret == MQTT_DISCONNECTED)
                 break;
         }
+    
         printf("Connection dropped, request restart\n\r");
         mqtt_network_disconnect(&network);
+        
         taskYIELD();
     }
 }
@@ -275,20 +308,12 @@ static void wifi_task(void *pvParameters)
         const char* password_;
         read_wifi_config(0, &ssid_, &password_);
         struct sdk_station_config config; 
-        memcpy(&config.ssid, ssid_, strlen((const char *)config.ssid));
-        memcpy(&config.password, password_, strlen((const char *)config.password));
+        memcpy(&config.ssid, ssid_, strlen((const char *)ssid_) + 1);
+        memcpy(&config.password, password_, strlen((const char *)password_) + 1);
         
-        printf("WiFi: connecting to WiFi SSID: %s PW: %s\n\r", config.ssid, config.password);
+        printf("WiFi: connecting to WiFi SSID:%s PW:%s\n\r", config.ssid, config.password);
         sdk_wifi_set_opmode(STATION_MODE);
         sdk_wifi_station_set_auto_connect(true);
-        /*struct ip_info ap_ip;
-        IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
-        IP4_ADDR(&ap_ip.gw, 0, 0, 0, 0);
-        IP4_ADDR(&ap_ip.netmask, 255, 255, 0, 0);
-        sdk_wifi_set_ip_info(1, &ap_ip);
-        struct sdk_softap_config ap_config = { .ssid = AP_SSID, .ssid_hidden = 0, .channel = 3, .ssid_len = strlen(AP_SSID), .authmode =
-                AUTH_WPA_WPA2_PSK, .password = AP_PSK, .max_connection = 3, .beacon_interval = 100, };
-        sdk_wifi_softap_set_config(&ap_config);*/
         sdk_wifi_station_set_config(&config);
         sdk_wifi_station_connect();
 
@@ -308,10 +333,10 @@ static void wifi_task(void *pvParameters)
             vTaskDelay( 1000 / portTICK_PERIOD_MS );
             --retries;
         }
+
         if (status == STATION_GOT_IP) {
             printf("WiFi: Connected\n\r");
-            //sdk_wifi_set_sleep_type(WIFI_SLEEP_LIGHT);
-            sdk_wifi_set_sleep_type(WIFI_SLEEP_LIGHT);
+            //sdk_wifi_set_sleep_type(WIFI_SLEEP_MODEM);
             xSemaphoreGive( wifi_alive );
             taskYIELD();
         }
@@ -324,47 +349,169 @@ static void wifi_task(void *pvParameters)
         sdk_wifi_station_disconnect();
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
         retries = 30;
-    }
+    } 
 }
 
-static void httpd_task(void *pvParameters)
+
+
+static void ap_task(void *pvParameters)
 {
-    ip_addr_t first_client_ip;
-    IP4_ADDR(&first_client_ip, 172, 16, 0, 2);
-    dhcpserver_start(&first_client_ip, 4);
+    struct ip_info ap_ip;
+    while(1) {
+        xSemaphoreGive( wifi_alive );
+        printf("Setting AP mode....\r\n");
+        sdk_wifi_set_opmode(STATIONAP_MODE);
+        IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
+        IP4_ADDR(&ap_ip.gw, 0, 0, 0, 0);
+        IP4_ADDR(&ap_ip.netmask, 255, 255, 0, 0);
+        sdk_wifi_set_ip_info(1, &ap_ip);
 
-    struct netconn *client = NULL;
-    struct netconn *nc = netconn_new(NETCONN_TCP);
-    if (nc == NULL) {
-        printf("Failed to allocate socket\n");
-        vTaskDelete(NULL);
-    }
-    netconn_bind(nc, IP_ADDR_ANY, 80);
-    netconn_listen(nc);
-    char buf[512];
-    while (1) {
-        err_t err = netconn_accept(nc, &client);
-        if (err == ERR_OK) {
-            struct netbuf *nb;
-            if ((err = netconn_recv(client, &nb)) == ERR_OK) {
-                void *data;
-                u16_t len;
-                netbuf_data(nb, &data, &len);
-                printf("Received data:\n%.*s\n", len, (char*) data);
+        struct sdk_softap_config ap_config = {
+            .ssid = AP_SSID,
+            .ssid_hidden = 0,
+            .channel = 1,
+            .ssid_len = strlen(AP_SSID),
+            .authmode = AUTH_WPA_WPA2_PSK,
+            .password = AP_PSK,
+            .max_connection = 3,
+            .beacon_interval = 100,
+        };
+        sdk_wifi_softap_set_config(&ap_config);
 
-                parse_http_header(data);
-
-                snprintf(buf, sizeof(buf),
-                        "HTTP/1.1 200 OK\r\n"
-                        "Content-type: text/html\r\n\r\n"
-                        "Test");
-                netconn_write(client, buf, strlen(buf), NETCONN_COPY);
-            }
-            netbuf_delete(nb);
+        ip_addr_t first_client_ip;
+        IP4_ADDR(&first_client_ip, 172, 16, 0, 2);
+        dhcpserver_start(&first_client_ip, 4);
+        dhcpserver_set_dns(&ap_ip.ip);
+        dhcpserver_set_router(&ap_ip.ip);
+        printf("Setting AP mode finished....\r\n");
+        struct netconn *client = NULL;
+        struct netconn *nc = netconn_new(NETCONN_TCP);
+        if (nc == NULL) {
+            printf("Failed to allocate socket\n");
+            vTaskDelete(NULL);
         }
-        printf("Closing connection\n");
-        netconn_close(client);
-        netconn_delete(client);
+        netconn_bind(nc, IP_ADDR_ANY, 80);
+        printf("http task binded\r\n");
+        netconn_listen(nc);
+        printf("http task listening\r\n");
+        char buf[1024];
+        while (1) {
+            err_t err = netconn_accept(nc, &client);
+            if (err == ERR_OK) {
+                struct netbuf *nb;
+                if ((err = netconn_recv(client, &nb)) == ERR_OK) {
+                    void *data;
+                    u16_t len;
+                    netbuf_data(nb, &data, &len);
+                    printf("Received data:\n%.*s\n", len, (char*) data);
+
+                    int ret = parse_http_header(data);
+                    if (ret == 0)
+                    {
+                        snprintf(buf, sizeof(buf),
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-type: text/html\r\n\r\n"
+                                "Test\r\n");
+                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                    } else if (ret == 1)
+                    {
+                        snprintf(buf, sizeof(buf),
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-type: text/html\r\n\r\n"
+                                );
+                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                        if (!cgiWifiAps.scanInProgress) {
+                        //Fill in json code for an access point
+                            for (int i = 0; i < cgiWifiAps.noAps; i++) {
+                                sprintf(buf, "{\"essid\": \"%s\", \"bssid\": \"" MACSTR "\", \"rssi\": \"%d\", \"enc\": \"%d\", \"channel\": \"%d\"}%s\n",
+                                    cgiWifiAps.apData[i]->ssid, MAC2STR(cgiWifiAps.apData[i]->bssid), cgiWifiAps.apData[i]->rssi,
+                                    cgiWifiAps.apData[i]->enc, cgiWifiAps.apData[i]->channel, ((i+1)==cgiWifiAps.noAps)?"":",");
+                                printf("%s\r\n", buf);
+                                netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                            }
+                        }
+                    }
+                }
+                netbuf_delete(nb);
+            }
+            printf("Closing connection\n");
+            netconn_close(client);
+            netconn_delete(client);
+        }
+    }
+    vTaskDelay( 1000 / portTICK_PERIOD_MS );
+}
+
+void wifiScanDoneCb(void *arg, sdk_scan_status_t status) {
+    int n;
+    struct sdk_bss_info *bss_link = (struct sdk_bss_info *)arg;
+    printf("wifiScanDoneCb %d\n", status);
+    if (status!=SCAN_OK) {
+        cgiWifiAps.scanInProgress=0;
+        return;
+    }
+
+    //Clear prev ap data if needed.
+    if (cgiWifiAps.apData!=NULL) {
+        for (n=0; n<cgiWifiAps.noAps; n++) free(cgiWifiAps.apData[n]);
+        free(cgiWifiAps.apData);
+    }
+
+    //Count amount of access points found.
+    n=0;
+    while (bss_link != NULL) {
+        bss_link = bss_link->next.stqe_next;
+        n++;
+    }
+    //Allocate memory for access point data
+    cgiWifiAps.apData=(ApData **)malloc(sizeof(ApData *)*n);
+    if (cgiWifiAps.apData==NULL) {
+        printf("Out of memory allocating apData\n");
+        return;
+    }
+    cgiWifiAps.noAps=n;
+    printf("Scan done: found %d APs\n", n);
+
+    //Copy access point data to the static struct
+    n=0;
+    bss_link = (struct sdk_bss_info *)arg;
+    while (bss_link != NULL) {
+        if (n>=cgiWifiAps.noAps) {
+            //This means the bss_link changed under our nose. Shouldn't happen!
+            //Break because otherwise we will write in unallocated memory.
+            printf("Huh? I have more than the allocated %d aps!\n", cgiWifiAps.noAps);
+            break;
+        }
+        //Save the ap data.
+        cgiWifiAps.apData[n]=(ApData *)malloc(sizeof(ApData));
+        if (cgiWifiAps.apData[n]==NULL) {
+            printf("Can't allocate mem for ap buff.\n");
+            cgiWifiAps.scanInProgress=0;
+            return;
+        }
+        cgiWifiAps.apData[n]->rssi=bss_link->rssi;
+        cgiWifiAps.apData[n]->channel=bss_link->channel;
+        cgiWifiAps.apData[n]->enc=bss_link->authmode;
+        strncpy(cgiWifiAps.apData[n]->ssid, (char*)bss_link->ssid, 32);
+        strncpy(cgiWifiAps.apData[n]->bssid, (char*)bss_link->bssid, 6);
+
+        bss_link = bss_link->next.stqe_next;
+        n++;
+    }
+    //We're done.
+    cgiWifiAps.scanInProgress=0;
+}
+
+static void scan_task(void *arg)
+{
+    //int len;
+    //char buff[1024]; // max SSID length + zero byte
+    if (cgiWifiAps.scanInProgress) return;
+    cgiWifiAps.scanInProgress=1;
+    sdk_wifi_station_scan(NULL, (sdk_scan_done_cb_t)&wifiScanDoneCb);
+    while (1)
+    {
+        vTaskDelay( 100000 / portTICK_PERIOD_MS );
     }
 }
 
@@ -372,15 +519,26 @@ void user_init(void)
 {
     uart_set_baud(0, 115200);
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
+    const char* device_id; 
+    read_device_id(&device_id);
+    printf("Device id:%s\n", device_id);
     vSemaphoreCreateBinary(wifi_alive);
     publish_queue = xQueueCreate(3, PUB_MSG_LEN);
     init_led();
     gpio_init();
-    xTaskCreate(&wifi_task, "wifi_task", 256, NULL, 2, NULL);
-    xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
-    xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
+    if (gpio_read(gpio) != active)
+    {
+        printf("Normal working mode...");
+        xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 2, NULL);
+        xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
+        xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
+    } else {
+        printf("Wifi AP mode...\r\n");
+        xTaskCreate(scan_task, "scan_task", 512, NULL, 2, NULL);
+        xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
+    }
     //xTaskCreate(&buttonIntTask, "buttonIntTask", 256, &tsqueue, 2, NULL);
+    //xTaskCreate(&httpd_task, "http_server", 1024, NULL, 2, NULL);
     xTaskCreate(&buttonPollTask, "buttonPollTask", 256, NULL, 2, NULL);
-    //xTaskCreate(&blinkTest, "blink_task", 1024, NULL, 5, NULL);
 }
 
