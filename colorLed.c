@@ -2,7 +2,7 @@
 #include "colorLed.h"
 #include "multipwm.h"
 
-static uint8_t pins[] = {12, 15, 14};  //R G B pins
+static uint8_t pins[] = {12, 15, 13};  //R G B pins
 static pwm_info_t pwm_info;
 
 bool started = true;
@@ -32,7 +32,7 @@ void close_led(void) {
 	multipwm_stop(&pwm_info);
 	gpio_disable(12);
 	gpio_disable(15);
-	gpio_disable(14);
+	gpio_disable(13);
 }	
 
 void set_led(uint8_t r, uint8_t g, uint8_t b) {

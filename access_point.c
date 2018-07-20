@@ -19,11 +19,11 @@
 #include <paho_mqtt_c/MQTTClient.h>
 #include "colorLed.h"
 
-#define MQTT_HOST ("192.168.1.110")
-#define MQTT_PORT 1883
+#define MQTT_HOST ("wifi.h2popo.com")
+#define MQTT_PORT 8083
 
-#define MQTT_USER NULL
-#define MQTT_PASS NULL
+#define MQTT_USER ("wopin")
+#define MQTT_PASS ("wopinH2popo")
 
 #define PUB_MSG_LEN 16
 
@@ -126,7 +126,9 @@ void buttonPollTask(void *pvParameters)
         }
         if (count > 5*10)
         {
-            printf("Sleep....Polled for button press at %d\r\n", count);
+            //printf("Sleep....Polled for button press at %d\r\n", count);
+            printf("Reset to AP mode. Restarting system...\n");
+            sdk_system_restart();
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
     }
@@ -369,11 +371,11 @@ static void ap_task(void *pvParameters)
         struct sdk_softap_config ap_config = {
             .ssid = AP_SSID,
             .ssid_hidden = 0,
-            .channel = 1,
+            .channel = 7,
             .ssid_len = strlen(AP_SSID),
             .authmode = AUTH_WPA_WPA2_PSK,
             .password = AP_PSK,
-            .max_connection = 3,
+            .max_connection = 1,
             .beacon_interval = 100,
         };
         sdk_wifi_softap_set_config(&ap_config);
@@ -408,10 +410,51 @@ static void ap_task(void *pvParameters)
                     int ret = parse_http_header(data);
                     if (ret == 0)
                     {
-                        snprintf(buf, sizeof(buf),
+                        //Test the wifi 
+                        const char* ssid_; 
+                        const char* password_;
+                        uint8_t status  = 0;
+                        uint8_t retries = 20;
+                        read_wifi_config(0, &ssid_, &password_);
+                        struct sdk_station_config config; 
+                        memcpy(&config.ssid, ssid_, strlen((const char *)ssid_) + 1);
+                        memcpy(&config.password, password_, strlen((const char *)password_) + 1);
+                        printf("WiFi: connecting to WiFi SSID:%s PW:%s\n\r", config.ssid, config.password);
+                        sdk_wifi_station_set_config(&config);
+                        sdk_wifi_station_connect();
+                        while ((status != STATION_GOT_IP) && (retries)){
+                            status = sdk_wifi_station_get_connect_status();
+                            printf("%s: status = %d\n\r", __func__, status );
+                            if( status == STATION_WRONG_PASSWORD ){
+                                printf("WiFi: wrong password\n\r");
+                                break;
+                            } else if( status == STATION_NO_AP_FOUND ) {
+                                printf("WiFi: AP not found\n\r");
+                                break;
+                            } else if( status == STATION_CONNECT_FAIL ) {
+                                printf("WiFi: connection failed\r\n");
+                                break;
+                            }
+                            vTaskDelay( 1000 / portTICK_PERIOD_MS );
+                            --retries;
+                        }
+
+                        if (status == STATION_GOT_IP) {
+                            set_led(0, 50, 0);
+                            printf("WiFi: Connected\n\r");
+                            snprintf(buf, sizeof(buf),
                                 "HTTP/1.1 200 OK\r\n"
                                 "Content-type: text/html\r\n\r\n"
-                                "Test\r\n");
+                                "Connected\r\n");
+                        } else {
+                            set_led(50, 0, 0);
+                            snprintf(buf, sizeof(buf),
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-type: text/html\r\n\r\n"
+                                "Fail\r\n");
+                        }
+                        //End
+                    
                         netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                     } else if (ret == 1)
                     {
@@ -534,6 +577,7 @@ void user_init(void)
         xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
     } else {
         printf("Wifi AP mode...\r\n");
+        set_led(0, 0, 30);
         xTaskCreate(scan_task, "scan_task", 512, NULL, 2, NULL);
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
     }

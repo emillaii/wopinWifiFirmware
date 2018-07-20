@@ -99,13 +99,13 @@ int parse_http_header(char *header)
             {
                 printf("ssid found\r\n");
                 isFoundSSID = true;
-                ssid_input = saveptr2;
+                ssid_input = saveptr2 + 1;   //Workaround for the header post with one space ahead
             }
             else if (strcmp(subtoken, password) == 0)
             {
                 printf("password found\r\n");
                 isFoundPw = true;
-                pw_input = saveptr2;
+                pw_input = saveptr2 + 1;
             }
             else if (strcmp(subtoken, scan) == 0)
             {
