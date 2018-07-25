@@ -41,6 +41,7 @@ static void buttonIntTask(void *pvParameters);
 SemaphoreHandle_t wifi_alive;
 QueueHandle_t publish_queue;
 
+const char* device_id; 
 const int gpio = 14;   /* gpio 0 usually has "PROGRAM" button attached */
 const int active = 0; /* active == 0 for active low */
 const gpio_inttype_t int_type = GPIO_INTTYPE_EDGE_NEG;
@@ -128,7 +129,7 @@ void buttonPollTask(void *pvParameters)
         {
             //printf("Sleep....Polled for button press at %d\r\n", count);
             printf("Reset to AP mode. Restarting system...\n");
-            sdk_system_restart();
+            break;
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
     }
@@ -265,7 +266,7 @@ static void  mqtt_task(void *pvParameters)
             continue;
         }
         printf("done\r\n");
-        mqtt_subscribe(&client, "/esptopic", MQTT_QOS1, topic_received);
+        mqtt_subscribe(&client, "demo", MQTT_QOS1, topic_received);
         xQueueReset(publish_queue);
 
         while(1){
@@ -280,7 +281,7 @@ static void  mqtt_task(void *pvParameters)
                 message.dup = 0;
                 message.qos = MQTT_QOS1;
                 message.retained = 0;
-                ret = mqtt_publish(&client, "/beat", &message);
+                ret = mqtt_publish(&client, "beat", &message);
                 if (ret != MQTT_SUCCESS ){
                     printf("error while publishing message: %d\n", ret );
                     break;
@@ -338,7 +339,8 @@ static void wifi_task(void *pvParameters)
 
         if (status == STATION_GOT_IP) {
             printf("WiFi: Connected\n\r");
-            //sdk_wifi_set_sleep_type(WIFI_SLEEP_MODEM);
+            sdk_wifi_set_sleep_type(WIFI_SLEEP_MODEM);
+            printf("MODEM Mode\n\r");
             xSemaphoreGive( wifi_alive );
             taskYIELD();
         }
@@ -359,7 +361,8 @@ static void wifi_task(void *pvParameters)
 static void ap_task(void *pvParameters)
 {
     struct ip_info ap_ip;
-    while(1) {
+    bool isWifiSet = false;
+    //while(1) {
         xSemaphoreGive( wifi_alive );
         printf("Setting AP mode....\r\n");
         sdk_wifi_set_opmode(STATIONAP_MODE);
@@ -440,22 +443,24 @@ static void ap_task(void *pvParameters)
                         }
 
                         if (status == STATION_GOT_IP) {
+                            isWifiSet = true;
                             set_led(0, 50, 0);
-                            printf("WiFi: Connected\n\r");
+                            printf("WiFi: Connected..\n\r");
                             snprintf(buf, sizeof(buf),
                                 "HTTP/1.1 200 OK\r\n"
                                 "Content-type: text/html\r\n\r\n"
-                                "Connected\r\n");
+                                );
+                            netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                            sprintf(buf, "{\"device_id\": \"%s\", \"status\": \"Connected\"}\n", device_id);
+                            netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                         } else {
                             set_led(50, 0, 0);
                             snprintf(buf, sizeof(buf),
                                 "HTTP/1.1 200 OK\r\n"
                                 "Content-type: text/html\r\n\r\n"
-                                "Fail\r\n");
+                                "{\"device_id\": \"%s\", \"status\": \"Fail\"}\r\n", device_id);
                         }
                         //End
-                    
-                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                     } else if (ret == 1)
                     {
                         snprintf(buf, sizeof(buf),
@@ -480,8 +485,13 @@ static void ap_task(void *pvParameters)
             printf("Closing connection\n");
             netconn_close(client);
             netconn_delete(client);
+            if (isWifiSet) {
+                printf("Wifi is configured by user\n\r");
+                vTaskDelay( 1000 / portTICK_PERIOD_MS );
+                break;
+            }
         }
-    }
+    //}
     vTaskDelay( 1000 / portTICK_PERIOD_MS );
 }
 
@@ -562,7 +572,6 @@ void user_init(void)
 {
     uart_set_baud(0, 115200);
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
-    const char* device_id; 
     read_device_id(&device_id);
     printf("Device id:%s\n", device_id);
     vSemaphoreCreateBinary(wifi_alive);
