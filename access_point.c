@@ -27,25 +27,30 @@
 
 #define PUB_MSG_LEN 16
 
-
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
+
+#define SCL_PIN (14)
+#define SDA_PIN (2)
 
 static void wifi_task(void *pvParameters);
 
 static void beat_task(void *pvParameters);
 static void ap_task(void *pvParameters);
 static void mqtt_task(void *pvParameters);
-static void buttonIntTask(void *pvParameters);
+static void signal_task(void *pvParameters);
+static void topic_received(mqtt_message_data_t *md);
+
+void wifiScanDoneCb(void *arg, sdk_scan_status_t status);
 
 SemaphoreHandle_t wifi_alive;
 QueueHandle_t publish_queue;
 
-const char* device_id; 
+char mqtt_client_id[20];  // this is device id
+
 const int gpio = 14;   /* gpio 0 usually has "PROGRAM" button attached */
 const int active = 0; /* active == 0 for active low */
 const gpio_inttype_t int_type = GPIO_INTTYPE_EDGE_NEG;
-
 
 static const char * const auth_modes [] = {
     [AUTH_OPEN]         = "Open",
@@ -76,37 +81,14 @@ typedef struct {
 //Static scan status storage.
 static ScanResultData cgiWifiAps;
 
-void gpio_intr_handler(uint8_t gpio_num);
-
 void gpio_init(void) 
 {
     gpio_enable(gpio, GPIO_INPUT);
+    gpio_enable(SCL_PIN, GPIO_OUT_OPEN_DRAIN);
+    gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
+    gpio_write(SCL_PIN, 1);
+    gpio_write(SDA_PIN, 0);
     tsqueue = xQueueCreate(2, sizeof(uint32_t));
-}
-
-void gpio_intr_handler(uint8_t gpio_num)
-{
-    uint32_t now = xTaskGetTickCountFromISR();
-    xQueueSendToBackFromISR(tsqueue, &now, NULL);
-}
-
-void buttonIntTask(void *pvParameters)
-{
-    printf("Waiting for button press interrupt on gpio %d.......\r\n", gpio);
-    QueueHandle_t *tsqueue = (QueueHandle_t *)pvParameters;
-    gpio_set_interrupt(gpio, int_type, gpio_intr_handler);
-    uint32_t last = 0;
-    while (1) {
-        uint32_t button_ts;
-        xQueueReceive(*tsqueue, &button_ts, portMAX_DELAY);
-        button_ts *= portTICK_PERIOD_MS;
-        if(last < button_ts-200) {
-            printf("Button interrupt fired at %dms\r\n", button_ts);
-            uint32_t delay = button_ts - last;
-            printf("Button pressed for %dms\r\n", delay);
-            last = button_ts;
-        }
-    }
 }
 
 void buttonPollTask(void *pvParameters)
@@ -151,50 +133,6 @@ static void beat_task(void *pvParameters)
     }
 }
 
-static void topic_received(mqtt_message_data_t *md)
-{
-    int i;
-    mqtt_message_t *message = md->message;
-    printf("Received: ");
-    for( i = 0; i < md->topic->lenstring.len; ++i)
-        printf("%c", md->topic->lenstring.data[ i ]);
-
-    printf(" = ");
-    for( i = 0; i < (int)message->payloadlen; ++i)
-        printf("%c", ((char *)(message->payload))[i]);
-
-    printf("\r\n");
-
-    if ((int)message->payloadlen == 8) {
-        if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '1') //Setting LED
-        {
-            printf("Setting LED command ");
-            char r[3] = "00\0";
-            char g[3] = "00\0";
-            char b[3] = "00\0";
-            r[0] = ((char *)(message->payload))[2]; r[1] = ((char *)(message->payload))[3]; 
-            g[0] = ((char *)(message->payload))[4]; g[1] = ((char *)(message->payload))[5]; 
-            b[0] = ((char *)(message->payload))[6]; b[1] = ((char *)(message->payload))[7]; 
-            uint8_t r_val = (uint8_t) strtol(r, NULL, 16);
-            uint8_t g_val = (uint8_t) strtol(g, NULL, 16);
-            uint8_t b_val = (uint8_t) strtol(b, NULL, 16);
-            
-            printf("r : %d g: %d b: %d \r\n", r_val, g_val, b_val);
-            set_led(r_val, g_val, b_val);
-        }
-    }
-    if ((int)message->payloadlen == 5) {
-        if (((char *)(message->payload))[0] == 's' && ((char *)(message->payload))[1] == 'l' &&
-            ((char *)(message->payload))[2] == 'e' && ((char *)(message->payload))[3] == 'e' &&
-            ((char *)(message->payload))[4] == 'p')
-        { 
-            sdk_system_deep_sleep(10*1000*1000);
-        }
-    } else if ((int)message->payloadlen == 6) {
-        close_led();
-    }
-}
-
 static const char *  get_my_id(void)
 {
     // Use MAC address for Station as unique ID
@@ -220,21 +158,42 @@ static const char *  get_my_id(void)
     return my_id;
 }
 
-static void  mqtt_task(void *pvParameters)
+static void signal_task(void *pvParameters)
+{
+    while (true)
+    {
+        bool state = gpio_read(SCL_PIN);
+        if (!state)
+        {
+            gpio_enable(SDA_PIN, GPIO_INPUT);
+            taskENTER_CRITICAL();
+            sdk_os_delay_us(100);
+            uint8_t buf[8];
+            for (uint8_t i = 0; i < 8; i++) {
+                sdk_os_delay_us(50);
+                uint8_t r = gpio_read(SDA_PIN);
+                buf[i] = r;
+                sdk_os_delay_us(50);
+            }
+            taskEXIT_CRITICAL();
+            printf("\r\n");
+            printf("data : %d%d%d%d %d%d%d%d \r\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+            gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
+        }
+        sdk_os_delay_us(10);
+    }
+}
+
+static void mqtt_task(void *pvParameters)
 {
     int ret         = 0;
     struct mqtt_network network;
     mqtt_client_t client   = mqtt_client_default;
-    char mqtt_client_id[20];
     uint8_t mqtt_buf[100];
     uint8_t mqtt_readbuf[100];
     mqtt_packet_connect_data_t data = mqtt_packet_connect_data_initializer;
 
     mqtt_network_new( &network );
-    memset(mqtt_client_id, 0, sizeof(mqtt_client_id));
-    strcpy(mqtt_client_id, "ESP-");
-    strcat(mqtt_client_id, get_my_id());
-
     while(1) {
         xSemaphoreTake(wifi_alive, portMAX_DELAY);
         printf("%s: started\n\r", __func__);
@@ -265,8 +224,7 @@ static void  mqtt_task(void *pvParameters)
             taskYIELD();
             continue;
         }
-        printf("done\r\n");
-        mqtt_subscribe(&client, "demo", MQTT_QOS1, topic_received);
+        mqtt_subscribe(&client, mqtt_client_id, MQTT_QOS0, topic_received);
         xQueueReset(publish_queue);
 
         while(1){
@@ -279,7 +237,7 @@ static void  mqtt_task(void *pvParameters)
                 message.payload = msg;
                 message.payloadlen = PUB_MSG_LEN;
                 message.dup = 0;
-                message.qos = MQTT_QOS1;
+                message.qos = MQTT_QOS0;
                 message.retained = 0;
                 ret = mqtt_publish(&client, "beat", &message);
                 if (ret != MQTT_SUCCESS ){
@@ -300,6 +258,58 @@ static void  mqtt_task(void *pvParameters)
     }
 }
 
+static void topic_received(mqtt_message_data_t *md)
+{
+    int i;
+    mqtt_message_t *message = md->message;
+    printf("Received: ");
+    for( i = 0; i < md->topic->lenstring.len; ++i)
+        printf("%c", md->topic->lenstring.data[ i ]);
+
+    printf(" = ");
+    for( i = 0; i < (int)message->payloadlen; ++i)
+        printf("%c", ((char *)(message->payload))[i]);
+
+    printf("\r\n");
+
+    if ((int)message->payloadlen == 8) {
+        if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '1') //Setting LED
+        {
+            char r[3] = "00\0";
+            char g[3] = "00\0";
+            char b[3] = "00\0";
+            r[0] = ((char *)(message->payload))[2]; r[1] = ((char *)(message->payload))[3]; 
+            g[0] = ((char *)(message->payload))[4]; g[1] = ((char *)(message->payload))[5]; 
+            b[0] = ((char *)(message->payload))[6]; b[1] = ((char *)(message->payload))[7]; 
+            uint8_t r_val = (uint8_t) strtol(r, NULL, 16);
+            uint8_t g_val = (uint8_t) strtol(g, NULL, 16);
+            uint8_t b_val = (uint8_t) strtol(b, NULL, 16);
+            printf("r : %d g: %d b: %d \r\n", r_val, g_val, b_val);
+            set_led(r_val, g_val, b_val);
+        }
+        if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '2') //Setting Hydro
+        {
+            printf("Setting Hydro\r\n");
+            if (((char *)(message->payload))[2] == '1')
+            {
+                printf("Hydro ON\r\n");   
+            } else {
+                printf("Hydro OFF\r\n");   
+            }
+        }
+    }
+    else if ((int)message->payloadlen == 5) {
+        if (((char *)(message->payload))[0] == 's' && ((char *)(message->payload))[1] == 'l' &&
+            ((char *)(message->payload))[2] == 'e' && ((char *)(message->payload))[3] == 'e' &&
+            ((char *)(message->payload))[4] == 'p')
+        { 
+            sdk_system_deep_sleep(10*1000*1000);
+        }
+    } else if ((int)message->payloadlen == 6) {
+        close_led();
+    }
+}
+
 static void wifi_task(void *pvParameters)
 {
     uint8_t status  = 0;
@@ -316,7 +326,7 @@ static void wifi_task(void *pvParameters)
         
         printf("WiFi: connecting to WiFi SSID:%s PW:%s\n\r", config.ssid, config.password);
         sdk_wifi_set_opmode(STATION_MODE);
-        sdk_wifi_station_set_auto_connect(true);
+        //sdk_wifi_station_set_auto_connect(true);
         sdk_wifi_station_set_config(&config);
         sdk_wifi_station_connect();
 
@@ -355,8 +365,6 @@ static void wifi_task(void *pvParameters)
         retries = 30;
     } 
 }
-
-
 
 static void ap_task(void *pvParameters)
 {
@@ -451,14 +459,14 @@ static void ap_task(void *pvParameters)
                                 "Content-type: text/html\r\n\r\n"
                                 );
                             netconn_write(client, buf, strlen(buf), NETCONN_COPY);
-                            sprintf(buf, "{\"device_id\": \"%s\", \"status\": \"Connected\"}\n", device_id);
+                            sprintf(buf, "{\"device_id\": \"%s\", \"status\": \"Connected\"}\n", mqtt_client_id);
                             netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                         } else {
                             set_led(50, 0, 0);
                             snprintf(buf, sizeof(buf),
                                 "HTTP/1.1 200 OK\r\n"
                                 "Content-type: text/html\r\n\r\n"
-                                "{\"device_id\": \"%s\", \"status\": \"Fail\"}\r\n", device_id);
+                                "{\"device_id\": \"%s\", \"status\": \"Fail\"}\r\n", mqtt_client_id);
                         }
                         //End
                     } else if (ret == 1)
@@ -470,14 +478,35 @@ static void ap_task(void *pvParameters)
                         netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                         if (!cgiWifiAps.scanInProgress) {
                         //Fill in json code for an access point
-                            for (int i = 0; i < cgiWifiAps.noAps; i++) {
-                                sprintf(buf, "{\"essid\": \"%s\", \"bssid\": \"" MACSTR "\", \"rssi\": \"%d\", \"enc\": \"%d\", \"channel\": \"%d\"}%s\n",
-                                    cgiWifiAps.apData[i]->ssid, MAC2STR(cgiWifiAps.apData[i]->bssid), cgiWifiAps.apData[i]->rssi,
-                                    cgiWifiAps.apData[i]->enc, cgiWifiAps.apData[i]->channel, ((i+1)==cgiWifiAps.noAps)?"":",");
-                                printf("%s\r\n", buf);
-                                netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                            cgiWifiAps.scanInProgress = 1;
+                            sdk_wifi_station_scan(NULL, (sdk_scan_done_cb_t)&wifiScanDoneCb);
+                            for ( int k = 0; k < 10; k++)
+                            {
+                                if (!cgiWifiAps.scanInProgress)
+                                {
+                                    for (int i = 0; i < cgiWifiAps.noAps; i++) {
+                                        sprintf(buf, "{\"essid\": \"%s\", \"bssid\": \"" MACSTR "\", \"rssi\": \"%d\", \"enc\": \"%d\", \"channel\": \"%d\"}%s\n",
+                                            cgiWifiAps.apData[i]->ssid, MAC2STR(cgiWifiAps.apData[i]->bssid), cgiWifiAps.apData[i]->rssi,
+                                            cgiWifiAps.apData[i]->enc, cgiWifiAps.apData[i]->channel, ((i+1)==cgiWifiAps.noAps)?"":",");
+                                        printf("%s\r\n", buf);
+                                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                                    }
+                                    k = 10;  //break the for loop
+                                } else {
+                                    printf("Scanning in progress...\r\n");
+                                    vTaskDelay( 1000 / portTICK_PERIOD_MS );
+                                }
                             }
                         }
+                    } else if (ret == 2)
+                    {
+                        printf("Going to reboot..");
+                        isWifiSet = true;
+                        snprintf(buf, sizeof(buf),
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-type: text/html\r\n\r\n"
+                                );
+                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                     }
                 }
                 netbuf_delete(nb);
@@ -555,25 +584,16 @@ void wifiScanDoneCb(void *arg, sdk_scan_status_t status) {
     cgiWifiAps.scanInProgress=0;
 }
 
-static void scan_task(void *arg)
-{
-    //int len;
-    //char buff[1024]; // max SSID length + zero byte
-    if (cgiWifiAps.scanInProgress) return;
-    cgiWifiAps.scanInProgress=1;
-    sdk_wifi_station_scan(NULL, (sdk_scan_done_cb_t)&wifiScanDoneCb);
-    while (1)
-    {
-        vTaskDelay( 100000 / portTICK_PERIOD_MS );
-    }
-}
-
 void user_init(void)
 {
+    memset(mqtt_client_id, 0, sizeof(mqtt_client_id));
+    strcpy(mqtt_client_id, "WOPIN-");
+    strcat(mqtt_client_id, get_my_id());
+
     uart_set_baud(0, 115200);
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
-    read_device_id(&device_id);
-    printf("Device id:%s\n", device_id);
+    printf("Device id:%s\n", mqtt_client_id);
+
     vSemaphoreCreateBinary(wifi_alive);
     publish_queue = xQueueCreate(3, PUB_MSG_LEN);
     init_led();
@@ -584,14 +604,12 @@ void user_init(void)
         xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 2, NULL);
         xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
         xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
+        xTaskCreate(&signal_task, "signal_task", 256, NULL, 5, NULL);
     } else {
         printf("Wifi AP mode...\r\n");
         set_led(0, 0, 30);
-        xTaskCreate(scan_task, "scan_task", 512, NULL, 2, NULL);
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
     }
-    //xTaskCreate(&buttonIntTask, "buttonIntTask", 256, &tsqueue, 2, NULL);
-    //xTaskCreate(&httpd_task, "http_server", 1024, NULL, 2, NULL);
     xTaskCreate(&buttonPollTask, "buttonPollTask", 256, NULL, 2, NULL);
 }
 

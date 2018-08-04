@@ -11,6 +11,7 @@
 #define HTTP_MSG_SSID 			"ssid"
 #define HTTP_MSG_PASSWORD 		"password"
 #define HTTP_MSG_SCAN			"scan"
+#define HTTP_MSG_END            "end"
 
 char buff_device_id[TOTAL_BYTE_LENGTH] = { 0 };
 char buff_ssid[TOTAL_BYTE_LENGTH] = { 0 };
@@ -83,6 +84,7 @@ int parse_http_header(char *header)
     const char ssid[] = HTTP_MSG_SSID;
     const char password[] = HTTP_MSG_PASSWORD;
     const char scan[] = HTTP_MSG_SCAN;
+    const char end[] = HTTP_MSG_END;
     bool isFoundSSID = false, isFoundPw = false;
     unsigned int j;
 
@@ -110,6 +112,11 @@ int parse_http_header(char *header)
             else if (strcmp(subtoken, scan) == 0)
             {
             	return 1;
+            }
+            else if (strcmp(subtoken, end) == 0)
+            {
+                printf("end signal found\r\n");
+                return 2;
             } 
         }
     }
