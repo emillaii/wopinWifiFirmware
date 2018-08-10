@@ -3,6 +3,7 @@
 
 #define SMART_CONFIG_SECTOR 	1020
 #define DEVICE_ID_SECTOR        1019
+#define DEVICE_STATE_SECTOR     1018
 //1 byte for ssid length, 64 bytes for ssid
 //1 byte for password length, 64 bytes for password
 #define TOTAL_BYTE_LENGTH 		130
@@ -40,21 +41,53 @@ void read_device_id(const char **device_id)
     *device_id = buff_device_id;
 }
 
+void set_device_state()
+{
+    char buff[TOTAL_BYTE_LENGTH] = "ap_mode";
+    sdk_spi_flash_erase_sector(DEVICE_STATE_SECTOR);
+    int result = sdk_spi_flash_write(DEVICE_STATE_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*) buff, TOTAL_BYTE_LENGTH);
+    if (result == SPI_FLASH_RESULT_OK)
+    {
+        printf("write ok....");
+    }
+    printf("write result: %d \r\n", result);
+}
+
+void reset_device_state()
+{
+    char buff[TOTAL_BYTE_LENGTH] = "sta_mode";
+    sdk_spi_flash_erase_sector(DEVICE_STATE_SECTOR);
+    int result = sdk_spi_flash_write(DEVICE_STATE_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*) buff, TOTAL_BYTE_LENGTH);
+    if (result == SPI_FLASH_RESULT_OK)
+    {
+        printf("write ok....");
+    }
+    printf("write result: %d \r\n", result);
+}
+
+int read_device_state(void)
+{
+    int state = 0;
+    char buff[TOTAL_BYTE_LENGTH];
+    sdk_spi_flash_read(DEVICE_STATE_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*)&buff, TOTAL_BYTE_LENGTH);
+    printf("state : %s \r\n", buff);
+    if (buff[0] == 'a' && buff[1] == 'p')
+    {
+        printf("Please go to ap mode!\r\n");
+        state = 1;
+    }
+    return state;
+}
+
 void read_wifi_config(int id, const char **ssid, const char **password)
 {
 	printf("read_wifi_config.....");
     sdk_spi_flash_read(SMART_CONFIG_SECTOR*SPI_FLASH_SEC_SIZE + 1, (uint32_t*)&buff_ssid, TOTAL_BYTE_LENGTH);
-    printf("%s \r\n", buff_ssid); 
-    //const char* str = buff_ssid;
+    printf("%s \r\n", buff_ssid);
     sdk_spi_flash_read(SMART_CONFIG_SECTOR*SPI_FLASH_SEC_SIZE + MAX_BYTE_LENGTH, (uint32_t*)&buff_pw, TOTAL_BYTE_LENGTH);
-    //const char* str1 = buff_pw;
     printf("%s \r\n", buff_pw); 
-	//const char* str  = "EmilWin";
-	//const char* str1 = "Laikwoktai";
 	*ssid = buff_ssid; 
 	*password = buff_pw;
-	//sdk_spi_flash_read(SMART_CONFIG_SECTOR*SPI_FLASH_SEC_SIZE + id*TOTAL_BYTE_LENGTH, (uint32_t*)&ssid, TOTAL_BYTE_LENGTH);
-	//sdk_spi_flash_read(SMART_CONFIG_SECTOR*SPI_FLASH_SEC_SIZE + id*TOTAL_BYTE_LENGTH + MAX_BYTE_LENGTH, (uint32_t*)&password, TOTAL_BYTE_LENGTH);
 }
 
 void save_wifi_config(const char *ssid, const char *password, int id)

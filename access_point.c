@@ -83,11 +83,8 @@ static ScanResultData cgiWifiAps;
 
 void gpio_init(void) 
 {
-    gpio_enable(gpio, GPIO_INPUT);
-    gpio_enable(SCL_PIN, GPIO_OUT_OPEN_DRAIN);
-    gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
-    gpio_write(SCL_PIN, 1);
-    gpio_write(SDA_PIN, 0);
+    gpio_enable(SCL_PIN, GPIO_INPUT);
+    gpio_enable(SDA_PIN, GPIO_INPUT);
     tsqueue = xQueueCreate(2, sizeof(uint32_t));
 }
 
@@ -111,6 +108,8 @@ void buttonPollTask(void *pvParameters)
         {
             //printf("Sleep....Polled for button press at %d\r\n", count);
             printf("Reset to AP mode. Restarting system...\n");
+            set_device_state();
+            sdk_system_restart();
             break;
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
@@ -133,7 +132,7 @@ static void beat_task(void *pvParameters)
     }
 }
 
-static const char *  get_my_id(void)
+static const char* get_my_id(void)
 {
     // Use MAC address for Station as unique ID
     static char my_id[13];
@@ -177,8 +176,36 @@ static void signal_task(void *pvParameters)
             }
             taskEXIT_CRITICAL();
             printf("\r\n");
-            printf("data : %d%d%d%d %d%d%d%d \r\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
-            gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
+            printf("Data : %d%d%d%d %d%d%d%d \r\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+            if (buf[0] == 1 && buf[1] == 1 && buf[2] == 0 && buf[3] == 0) // c : 1101
+            {
+                if (buf[4] == 0 && buf[5] == 0 && buf[6] == 0 && buf[7] == 1) // 0xc1
+                {
+                    printf("0xc1 command Received\r\n");
+                } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 0 && buf[7] == 1) //0xc5
+                {
+                    printf("0xc5 command Received\r\n");
+                } else if (buf[4] == 0 && buf[5] == 0 && buf[6] == 1 && buf[7] == 0) //0xc5
+                {
+                    printf("0xc2 command Received\r\n");
+                } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 1) //0xc7
+                {
+                    printf("0xc7 command Received\r\n");
+                } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 0 && buf[7] == 0) //0xc8
+                {
+                    printf("0xc8 command Received\r\n");
+                } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 0 && buf[7] == 1) //0xc9
+                {
+                    printf("0xc9 command Received\r\n");
+                } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 0) //0xc6
+                {
+                    printf("0xc6 command Received\r\n");
+                } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 1 && buf[7] == 1) //0xcb
+                {
+                    printf("0xcb command Received\r\n");
+                }
+            }
+            //gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
         }
         sdk_os_delay_us(10);
     }
@@ -286,6 +313,7 @@ static void topic_received(mqtt_message_data_t *md)
             uint8_t b_val = (uint8_t) strtol(b, NULL, 16);
             printf("r : %d g: %d b: %d \r\n", r_val, g_val, b_val);
             set_led(r_val, g_val, b_val);
+            set_key_led(r_val, g_val, b_val);
         }
         if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '2') //Setting Hydro
         {
@@ -305,7 +333,8 @@ static void topic_received(mqtt_message_data_t *md)
         { 
             sdk_system_deep_sleep(10*1000*1000);
         }
-    } else if ((int)message->payloadlen == 6) {
+    }
+    else if ((int)message->payloadlen == 6) {
         close_led();
     }
 }
@@ -317,6 +346,7 @@ static void wifi_task(void *pvParameters)
 
     while(1)
     {
+        printf("wifi_task\r\n");
         const char* ssid_; 
         const char* password_;
         read_wifi_config(0, &ssid_, &password_);
@@ -598,18 +628,28 @@ void user_init(void)
     publish_queue = xQueueCreate(3, PUB_MSG_LEN);
     init_led();
     gpio_init();
-    if (gpio_read(gpio) != active)
+    int state = read_device_state();
+    if (state == 0)
     {
-        printf("Normal working mode...");
-        xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 2, NULL);
-        xTaskCreate(&beat_task, "beat_task", 256, NULL, 3, NULL);
-        xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 4, NULL);
-        xTaskCreate(&signal_task, "signal_task", 256, NULL, 5, NULL);
-    } else {
+        printf("Normal working mode!!!\r\n");
+        xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 1, NULL);
+        printf("Create Wifi Task Finished\r\n");
+        xTaskCreate(&beat_task, "beat_task", 256, NULL, 1, NULL);
+        xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 1, NULL);
+        xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
+        set_led(30, 0, 0);
+        set_key_led(0, 30, 0);
+    } else if (state == 1) {
         printf("Wifi AP mode...\r\n");
         set_led(0, 0, 30);
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
+        reset_device_state();
     }
-    xTaskCreate(&buttonPollTask, "buttonPollTask", 256, NULL, 2, NULL);
+    //xTaskCreate(&buttonPollTask, "buttonPollTask", 256, NULL, 1, NULL);
+    /*while(1)
+    {
+        printf("hello....\r\n");
+        vTaskDelay(200 / portTICK_PERIOD_MS);
+    }*/
 }
 
