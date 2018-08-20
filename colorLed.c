@@ -4,7 +4,7 @@
 
 //static uint8_t pins[] = {0, 12, 13};   //R G B pins LED_R, G, B
 //static uint8_t pins_key[] = {15, 4, 5}; //R G B pings KEY_LED_R, G, B
-static uint8_t pins_total[] = {0, 12, 13, 15, 4, 5};
+static uint8_t pins_total[] = {15, 12, 13, 0, 4, 5};
 static pwm_info_t pwm_total_info;
 
 bool started = true;
@@ -34,7 +34,7 @@ void init_led(void) {
 void close_led(void) {
 	started = false;
 	multipwm_stop(&pwm_total_info);
-	gpio_disable(0);
+	gpio_disable(15);
 	gpio_disable(12);
 	gpio_disable(13);
 }	
@@ -42,7 +42,7 @@ void close_led(void) {
 void close_key_led(void) {
 	key_started = false;
 	multipwm_stop(&pwm_total_info);
-	gpio_disable(15);
+	gpio_disable(0);
 	gpio_disable(4);
 	gpio_disable(5);
 }

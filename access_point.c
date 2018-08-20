@@ -39,6 +39,7 @@ static void beat_task(void *pvParameters);
 static void ap_task(void *pvParameters);
 static void mqtt_task(void *pvParameters);
 static void signal_task(void *pvParameters);
+static void led_task(void *pvParameters);
 static void topic_received(mqtt_message_data_t *md);
 
 void wifiScanDoneCb(void *arg, sdk_scan_status_t status);
@@ -88,6 +89,115 @@ void gpio_init(void)
     tsqueue = xQueueCreate(2, sizeof(uint32_t));
 }
 
+
+//led_mode == 0 : blue breath mode
+//led_mode == 1 : color breath mode
+//led_mode == 2 : green color on 
+int led_mode = 2; 
+bool led_forward = true;
+int color_mode = 0;
+int r_count = 0, g_count = 0, b_count = 0;
+static void led_task(void *pvParameters)
+{
+    while (1) {
+        if (led_mode == 0) { //
+            set_led(0, 0, g_count);
+            if (led_forward) g_count++;
+            else g_count--; 
+            if (g_count == 255) { 
+                led_forward = false;
+            } else if (g_count == 0) {
+                led_forward = true;
+            }
+        } else if (led_mode == 2) {
+            set_led(0, 50, 0);
+        } 
+        else if (led_mode == 1) {
+            set_led(r_count, g_count, b_count);
+            if (color_mode == 0) {    //Green
+                if (led_forward) g_count++;
+                else g_count--;
+                if (g_count == 128) { 
+                    led_forward = false;
+                } else if (g_count == 0) {
+                    led_forward = true;
+                    color_mode++;
+                    r_count = 0; g_count = 0; b_count = 0;
+                }
+            } else if (color_mode == 1) {  //Orange
+                if (led_forward) { 
+                    r_count = r_count + 2;
+                    g_count++;
+                }
+                else {
+                    r_count = r_count - 2;
+                    g_count--;
+                }
+                if (g_count == 128) { 
+                    led_forward = false;
+                } else if (g_count == 0) {
+                    led_forward = true;
+                    color_mode++;
+                    r_count = 0; g_count = 0; b_count = 0;
+                }
+            } else if (color_mode == 2) {    //Red
+                if (led_forward) r_count++;
+                else r_count--;
+                if (r_count == 128) { 
+                    led_forward = false;
+                } else if (r_count == 0) {
+                    led_forward = true;
+                    color_mode++;
+                    r_count = 0; g_count = 0; b_count = 0;
+                }
+            } else if (color_mode == 3) {  //purple
+                if (led_forward) { 
+                    b_count = b_count + 2;
+                    r_count++;
+                }
+                else  {
+                    b_count = b_count - 2;
+                    r_count--;
+                }
+                if (r_count == 128) { 
+                    led_forward = false;
+                } else if (r_count == 0) {
+                    led_forward = true;
+                    color_mode++;
+                    r_count = 0; g_count = 0; b_count = 0;
+                } 
+            } else if (color_mode == 4) {    //blue
+                if (led_forward) b_count++;
+                else b_count--;
+                if (b_count == 128) { 
+                    led_forward = false;
+                } else if (b_count == 0) {
+                    led_forward = true;
+                    color_mode++;
+                    r_count = 0; g_count = 0; b_count = 0;
+                }
+            } else if (color_mode == 5) {    //cyan
+                if (led_forward) { 
+                    b_count = b_count + 2;
+                    g_count++;
+                }
+                else  {
+                    b_count = b_count - 2;
+                    g_count--;
+                }
+                if (g_count == 128) { 
+                    led_forward = false;
+                } else if (g_count == 0) {
+                    led_forward = true;
+                    color_mode = 0;
+                    r_count = 0; g_count = 0; b_count = 0;
+                } 
+            } 
+        }
+        vTaskDelay(5 / portTICK_PERIOD_MS);
+    }
+}
+
 void buttonPollTask(void *pvParameters)
 {
     printf("Polling for button press on gpio %d...\r\n", gpio);
@@ -106,10 +216,7 @@ void buttonPollTask(void *pvParameters)
         }
         if (count > 5*10)
         {
-            //printf("Sleep....Polled for button press at %d\r\n", count);
             printf("Reset to AP mode. Restarting system...\n");
-            set_device_state();
-            sdk_system_restart();
             break;
         }
         vTaskDelay(200 / portTICK_PERIOD_MS);
@@ -185,8 +292,13 @@ static void signal_task(void *pvParameters)
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 0 && buf[7] == 1) //0xc5
                 {
                     printf("0xc5 command Received\r\n");
-                } else if (buf[4] == 0 && buf[5] == 0 && buf[6] == 1 && buf[7] == 0) //0xc5
+                } else if (buf[4] == 0 && buf[5] == 0 && buf[6] == 1 && buf[7] == 0) //0xc2
                 {
+                    color_mode = 0;
+                    g_count = 0; r_count = 0; b_count = 0;
+                    led_forward = true;
+                    led_mode++; 
+                    led_mode = led_mode % 3;
                     printf("0xc2 command Received\r\n");
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 1) //0xc7
                 {
@@ -197,12 +309,25 @@ static void signal_task(void *pvParameters)
                 } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 0 && buf[7] == 1) //0xc9
                 {
                     printf("0xc9 command Received\r\n");
+                    color_mode = 0;
+                    g_count = 0; r_count = 0; b_count = 0;
+                    led_forward = true;
+                    led_mode = 1;   //color led breath mode
+                } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 1 && buf[7] == 0) //0xca
+                {
+                    printf("0xca command Received\r\n");
+                    color_mode = 0; g_count = 0; r_count = 0; b_count = 0;
+                    led_forward = true;
+                    led_mode = 0;   //blue led on
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 0) //0xc6
                 {
                     printf("0xc6 command Received\r\n");
                 } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 1 && buf[7] == 1) //0xcb
                 {
                     printf("0xcb command Received\r\n");
+                    set_device_state();
+                    sdk_system_restart();
+                    break;
                 }
             }
             //gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
@@ -213,7 +338,7 @@ static void signal_task(void *pvParameters)
 
 static void mqtt_task(void *pvParameters)
 {
-    int ret         = 0;
+    int ret = 0;
     struct mqtt_network network;
     mqtt_client_t client   = mqtt_client_default;
     uint8_t mqtt_buf[100];
@@ -346,7 +471,6 @@ static void wifi_task(void *pvParameters)
 
     while(1)
     {
-        printf("wifi_task\r\n");
         const char* ssid_; 
         const char* password_;
         read_wifi_config(0, &ssid_, &password_);
@@ -362,7 +486,6 @@ static void wifi_task(void *pvParameters)
 
         while ((status != STATION_GOT_IP) && (retries)){
             status = sdk_wifi_station_get_connect_status();
-            printf("%s: status = %d\n\r", __func__, status );
             if( status == STATION_WRONG_PASSWORD ){
                 printf("WiFi: wrong password\n\r");
                 break;
@@ -629,6 +752,9 @@ void user_init(void)
     init_led();
     gpio_init();
     int state = read_device_state();
+    set_led(0, 0, 30);
+    xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
+    reset_device_state();
     if (state == 0)
     {
         printf("Normal working mode!!!\r\n");
@@ -637,11 +763,13 @@ void user_init(void)
         xTaskCreate(&beat_task, "beat_task", 256, NULL, 1, NULL);
         xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 1, NULL);
         xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
-        set_led(30, 0, 0);
-        set_key_led(0, 30, 0);
+        xTaskCreate(&led_task, "led_task", 256, NULL, 1, NULL);
+        set_led(0, 0, 0);
+        set_key_led(0, 0, 0);
     } else if (state == 1) {
         printf("Wifi AP mode...\r\n");
-        set_led(0, 0, 30);
+        set_key_led(0, 0, 0);     
+        set_led(0, 0, 0);
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
         reset_device_state();
     }
