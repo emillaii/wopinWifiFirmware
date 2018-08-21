@@ -434,6 +434,7 @@ static void signal_task(void *pvParameters)
                     //send_cmd = 1;  //send 0xc1 to pmc
                     //send_cmd = 2;  //send 0xc2 to pmc
                     //send_cmd = 3;  //send 0xcd to pmc
+                    hydro_timer = 0; //off hydro
                     printf("0xc2 command Received\r\n");
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 1) //0xc7
                 {
@@ -497,7 +498,7 @@ static void signal_task(void *pvParameters)
                         led_mode = 1;   //color led breath mode
                         key_led_mode = 1;
                     }
-                } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 0) //0xc6
+                } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 0) //0xc6 
                 {
                     printf("0xc6 command Received\r\n");
                     key_led_mode = 3;
