@@ -435,6 +435,8 @@ static void signal_task(void *pvParameters)
                     //send_cmd = 2;  //send 0xc2 to pmc
                     //send_cmd = 3;  //send 0xcd to pmc
                     hydro_timer = 0; //off hydro
+                    led_mode = 99;
+                    key_led_mode = 99;
                     printf("0xc2 command Received\r\n");
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 1) //0xc7
                 {
