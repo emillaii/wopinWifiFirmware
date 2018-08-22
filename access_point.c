@@ -114,11 +114,11 @@ static void send_to_pmc_task(void *pvParameters)
                 if (i == 0)
                     gpio_write(SDA_PIN, 1);
                 else if (i == 1)
-                    gpio_write(SDA_PIN, 0);
+                    gpio_write(SDA_PIN, 1);
                 else if (i == 2)
-                    gpio_write(SDA_PIN, 1);
+                    gpio_write(SDA_PIN, 0);
                 else if (i == 3)
-                    gpio_write(SDA_PIN, 1);
+                    gpio_write(SDA_PIN, 0);
                 else if (i == 4) {
                     if (send_cmd == 3) {
                         gpio_write(SDA_PIN, 1);
@@ -425,14 +425,20 @@ static void signal_task(void *pvParameters)
                     printf("0xc1 command Received\r\n");
                     hydro_mode = 0; 
                     hydro_timer = 5 * 60;
+                    color_mode = 0, key_color_mode = 0;
+                    g_count = 0; r_count = 0; b_count = 0;
+                    key_g_count = 0; key_r_count = 0; key_b_count = 0;
+                    led_forward = true; key_led_forward = true;
+                    key_led_mode = 1;
+                    led_mode = 1;
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 0 && buf[7] == 1) //0xc5 key led red, main led off
                 {
                     printf("0xc5 command Received\r\n");
                     key_led_mode = 2;
                     led_mode = 99;
+                    hydro_timer = 0;
                 } else if (buf[4] == 0 && buf[5] == 0 && buf[6] == 1 && buf[7] == 0) //0xc2
                 {
-
                     //send_cmd = 1;  //send 0xc1 to pmc
                     //send_cmd = 2;  //send 0xc2 to pmc
                     //send_cmd = 3;  //send 0xcd to pmc
@@ -445,6 +451,7 @@ static void signal_task(void *pvParameters)
                     printf("0xc7 command Received\r\n");
                     led_mode = 50; 
                     key_led_mode = 50; 
+                    hydro_timer = 0;
                     set_led(50, 0, 0); 
                     set_key_led(50, 0, 0);
                     vTaskDelay(500 / portTICK_PERIOD_MS);
@@ -951,8 +958,6 @@ void user_init(void)
         xTaskCreate(&key_led_task, "key_led_task", 256, NULL, 1, NULL);
         xTaskCreate(&hydro_task, "hydro_task", 256, NULL, 1, NULL);
         xTaskCreate(&send_to_pmc_task, "send_to_pmc_task", 256, NULL, 1, NULL);
-        set_led(0, 0, 0);
-        set_key_led(0, 0, 0);
     } else if (state == 1) {
         printf("Wifi AP mode...\r\n");
         set_key_led(50, 50, 0);     
