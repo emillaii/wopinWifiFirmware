@@ -111,7 +111,6 @@ static void send_to_pmc_task(void *pvParameters)
             gpio_write(SCL_PIN, 0);
             sdk_os_delay_us(100);
             for (uint8_t i = 0; i < 8; i++) {
-                sdk_os_delay_us(100);
                 if (i == 0)
                     gpio_write(SDA_PIN, 1);
                 else if (i == 1)
@@ -145,8 +144,8 @@ static void send_to_pmc_task(void *pvParameters)
                         gpio_write(SDA_PIN, 1);
                     }
                 }
+                sdk_os_delay_us(100);
             }
-            sdk_os_delay_us(100);
             gpio_write(SCL_PIN, 1);
             sdk_os_delay_us(100);
             gpio_enable(SCL_PIN, GPIO_INPUT);
@@ -346,7 +345,10 @@ static void hydro_task(void *pvParameters)
                 gpio_write(HYDRO_PIN_B, 0);
             }
             hydro_timer--;
-            printf("hydro...\r\n");
+            printf("hydro...%d\r\n", hydro_timer);
+            if (hydro_timer == 0) { // If timer count down to 0 success, then send 0xc2 to pmc
+                send_cmd = 2;
+            }
         } else {
             gpio_write(HYDRO_PIN_A, 0);
             gpio_write(HYDRO_PIN_B, 0);
@@ -422,7 +424,7 @@ static void signal_task(void *pvParameters)
                 {
                     printf("0xc1 command Received\r\n");
                     hydro_mode = 0; 
-                    hydro_timer = 10 * 60;
+                    hydro_timer = 5 * 60;
                 } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 0 && buf[7] == 1) //0xc5 key led red, main led off
                 {
                     printf("0xc5 command Received\r\n");
