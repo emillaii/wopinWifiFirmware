@@ -188,7 +188,7 @@ static void key_led_task(void *pvParameters)
         } else {
 
         }
-        vTaskDelay(5 / portTICK_PERIOD_MS);
+        vTaskDelay(15 / portTICK_PERIOD_MS);
     }
 }
 
@@ -302,7 +302,7 @@ static void led_task(void *pvParameters)
         } else {
 
         }
-        vTaskDelay(5 / portTICK_PERIOD_MS);
+        vTaskDelay(15 / portTICK_PERIOD_MS);
     }
 }
 
@@ -331,6 +331,8 @@ void buttonPollTask(void *pvParameters)
     }
 }
 
+int modem_sleep_timer = 0;
+int deep_sleep_timer = 0;
 int hydro_timer = 0;
 int hydro_mode = 0; // 0: normal mode 1: clean mode
 static void hydro_task(void *pvParameters)
@@ -347,12 +349,54 @@ static void hydro_task(void *pvParameters)
             hydro_timer--;
             printf("hydro...%d\r\n", hydro_timer);
             if (hydro_timer == 0) { // If timer count down to 0 success, then send 0xc2 to pmc
+                led_mode = 99;
+                key_led_mode = 99;
                 send_cmd = 2;
             }
         } else {
             gpio_write(HYDRO_PIN_A, 0);
             gpio_write(HYDRO_PIN_B, 0);
         }
+        uint32_t adc_read = sdk_system_adc_read();
+        printf("adc_read: %d\r\n", adc_read);
+
+        if (adc_read <= 537) {
+            led_mode = 50; 
+            key_led_mode = 50; 
+            set_led(50, 0, 0); 
+            set_key_led(50, 0, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            set_led(0, 0, 0); 
+            set_key_led(0, 0, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            set_led(50, 0, 0); 
+            set_key_led(50, 0, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            set_led(0, 0, 0); 
+            set_key_led(0, 0, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            set_led(50, 0, 0); 
+            set_key_led(50, 0, 0);
+            vTaskDelay(500 / portTICK_PERIOD_MS);
+            set_led(0, 0, 0); 
+            set_key_led(0, 0, 0);
+            gpio_write(HYDRO_PIN_A, 0);
+            gpio_write(HYDRO_PIN_B, 0);
+            send_cmd = 2;
+        }
+
+        if (modem_sleep_timer == 2*60) { // go to modem sleep mode
+            key_led_mode = 99;
+            led_mode = 99;
+            deep_sleep_timer++;
+        } else {
+            modem_sleep_timer++;
+        }
+
+        if (deep_sleep_timer == 2*60) {  // go to deep sleep mode
+            sdk_system_deep_sleep(2*60*1000*1000);
+        }
+
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
@@ -402,11 +446,12 @@ static void signal_task(void *pvParameters)
 {
     while (true)
     {
+        taskYIELD();
+        taskENTER_CRITICAL();
         bool state = gpio_read(SCL_PIN);
         if (!state)
         {
             gpio_enable(SDA_PIN, GPIO_INPUT);
-            taskENTER_CRITICAL();
             sdk_os_delay_us(100);
             uint8_t buf[8];
             for (uint8_t i = 0; i < 8; i++) {
@@ -415,7 +460,6 @@ static void signal_task(void *pvParameters)
                 buf[i] = r;
                 sdk_os_delay_us(50);
             }
-            taskEXIT_CRITICAL();
             printf("\r\n");
             printf("Data : %d%d%d%d %d%d%d%d \r\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
             if (buf[0] == 1 && buf[1] == 1 && buf[2] == 0 && buf[3] == 0) // c : 1101
@@ -523,6 +567,7 @@ static void signal_task(void *pvParameters)
             }
             //gpio_enable(SDA_PIN, GPIO_OUT_OPEN_DRAIN);
         }
+        taskEXIT_CRITICAL();
         sdk_os_delay_us(10);
     }
 }
@@ -545,7 +590,7 @@ static void mqtt_task(void *pvParameters)
         ret = mqtt_network_connect(&network, MQTT_HOST, MQTT_PORT);
         if( ret ){
             printf("error: %d\n\r", ret);
-            taskYIELD();
+            //taskYIELD();
             continue;
         }
         printf("done\n\r");
@@ -564,7 +609,7 @@ static void mqtt_task(void *pvParameters)
         if(ret){
             printf("error: %d\n\r", ret);
             mqtt_network_disconnect(&network);
-            taskYIELD();
+            //taskYIELD();
             continue;
         }
         mqtt_subscribe(&client, mqtt_client_id, MQTT_QOS0, topic_received);
@@ -597,7 +642,7 @@ static void mqtt_task(void *pvParameters)
         printf("Connection dropped, request restart\n\r");
         mqtt_network_disconnect(&network);
         
-        taskYIELD();
+        //taskYIELD();
     }
 }
 
@@ -691,17 +736,19 @@ static void wifi_task(void *pvParameters)
             --retries;
         }
 
-        if (status == STATION_GOT_IP) {
-            printf("WiFi: Connected\n\r");
-            sdk_wifi_set_sleep_type(WIFI_SLEEP_MODEM);
-            printf("MODEM Mode\n\r");
-            xSemaphoreGive( wifi_alive );
-            taskYIELD();
-        }
+        // if (status == STATION_GOT_IP) {
+        //     printf("WiFi: Connected\n\r");
+        //     sdk_wifi_set_sleep_type(WIFI_SLEEP_MODEM);
+        //     printf("MODEM Mode\n\r");
+        //     xSemaphoreGive( wifi_alive );
+        //     //taskYIELD();
+        // }
 
         while ((status = sdk_wifi_station_get_connect_status()) == STATION_GOT_IP) {
+            //printf("WiFi: Connected\n\r");
             xSemaphoreGive( wifi_alive );
-            taskYIELD();
+            //taskYIELD()
+            vTaskDelay( 2000 / portTICK_PERIOD_MS );
         }
         printf("WiFi: disconnected\n\r");
         sdk_wifi_station_disconnect();
@@ -943,8 +990,6 @@ void user_init(void)
     init_led();
     gpio_init();
     int state = read_device_state();
-    set_led(0, 0, 30);
-    xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
     reset_device_state();
     if (state == 0)
     {

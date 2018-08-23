@@ -19,7 +19,12 @@ void init_led(void) {
     }
     multipwm_start(&pwm_total_info);
     //multipwm_set_duty_all(&pwm_total_info, MULTIPWM_MAX_PERIOD);
-
+    for (int i = 0; i < 3; i++) {
+    	multipwm_set_duty(&pwm_total_info, i, 0);
+    	gpio_disable(0);
+    	gpio_disable(4);
+    	gpio_disable(5);
+    }
 	printf("init led finished...\r\n");
 }
 
