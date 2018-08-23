@@ -393,7 +393,7 @@ static void hydro_task(void *pvParameters)
             modem_sleep_timer++;
         }
 
-        if (deep_sleep_timer == 2*60) {  // go to deep sleep mode
+        if (hydro_timer == 0 && deep_sleep_timer >= 2*60) {  //If finish hydro go to deep sleep mode
             sdk_system_deep_sleep(2*60*1000*1000);
         }
 
@@ -451,6 +451,9 @@ static void signal_task(void *pvParameters)
         bool state = gpio_read(SCL_PIN);
         if (!state)
         {
+            //Received any signal from PMC, restart timer
+            modem_sleep_timer = 0; 
+            deep_sleep_timer = 0;
             gpio_enable(SDA_PIN, GPIO_INPUT);
             sdk_os_delay_us(100);
             uint8_t buf[8];
