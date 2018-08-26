@@ -39,6 +39,7 @@ static void wifi_task(void *pvParameters);
 
 static void beat_task(void *pvParameters);
 static void ap_task(void *pvParameters);
+static void ap_count_task(void *pvParameters);
 static void mqtt_task(void *pvParameters);
 static void signal_task(void *pvParameters);
 static void led_task(void *pvParameters);
@@ -47,6 +48,8 @@ static void topic_received(mqtt_message_data_t *md);
 static void hydro_task(void *pvParameters);
 static void send_to_pmc_task(void *pvParameters);
 
+const gpio_inttype_t int_type = GPIO_INTTYPE_EDGE_NEG;
+void gpio_intr_handler(uint8_t gpio_num);
 void wifiScanDoneCb(void *arg, sdk_scan_status_t status);
 
 SemaphoreHandle_t wifi_alive;
@@ -54,9 +57,9 @@ QueueHandle_t publish_queue;
 
 char mqtt_client_id[20];  // this is device id
 
+const uint32_t wakeupTime = 30*60*1000*1000;
 const int gpio = 14;   /* gpio 0 usually has "PROGRAM" button attached */
 const int active = 0; /* active == 0 for active low */
-const gpio_inttype_t int_type = GPIO_INTTYPE_EDGE_NEG;
 
 static const char * const auth_modes [] = {
     [AUTH_OPEN]         = "Open",
@@ -67,6 +70,13 @@ static const char * const auth_modes [] = {
 };
 
 static QueueHandle_t tsqueue;
+
+void gpio_intr_handler(uint8_t gpio_num)
+{
+    uint32_t now = xTaskGetTickCountFromISR();
+    xQueueSendToBackFromISR(tsqueue, &now, ( TickType_t ) 0U);
+}
+
 
 //WiFi access point data
 typedef struct {
@@ -384,19 +394,16 @@ static void hydro_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
             send_cmd = 2;
         }
-
-        if (modem_sleep_timer == 2*60) { // go to modem sleep mode
+        if (modem_sleep_timer == 5*60) { // go to modem sleep mode
             key_led_mode = 99;
             led_mode = 99;
             deep_sleep_timer++;
         } else {
             modem_sleep_timer++;
         }
-
-        if (hydro_timer == 0 && deep_sleep_timer >= 2*60) {  //If finish hydro go to deep sleep mode
-            sdk_system_deep_sleep(2*60*1000*1000);
+        if (hydro_timer == 0 && deep_sleep_timer >= 15*60) {  //If finish hydro go to deep sleep mode
+            sdk_system_deep_sleep(wakeupTime);
         }
-
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
@@ -442,6 +449,151 @@ static const char* get_my_id(void)
     return my_id;
 }
 
+int ap_count = 0;
+static void ap_count_task(void *pvParameters)
+{
+    while(1)
+    {
+        if (ap_count == 3 * 60) {
+            printf("AP Mode Timeout\r\n");
+            sdk_system_deep_sleep(wakeupTime); 
+        }
+        ap_count++;
+        vTaskDelay( 1000 / portTICK_PERIOD_MS );
+    }
+}
+
+void buttonIntTask(void *pvParameters)
+{
+    printf("Waiting for button press interrupt on gpio %d...\r\n", gpio);
+    QueueHandle_t *tsqueue = (QueueHandle_t *)pvParameters;
+    gpio_set_interrupt(SCL_PIN, int_type, gpio_intr_handler);
+    uint32_t last = 0;
+    while(1) {
+        uint32_t button_ts;
+        xQueueReceive(*tsqueue, &button_ts, portMAX_DELAY);
+
+        taskYIELD();
+        modem_sleep_timer = 0; 
+        deep_sleep_timer = 0;
+        ap_count = 0;
+        //gpio_enable(SDA_PIN, GPIO_INPUT);
+        sdk_os_delay_us(1000);
+        uint8_t buf[8];
+        for (uint8_t i = 0; i < 8; i++) {
+            sdk_os_delay_us(50);
+            uint8_t r = gpio_read(SDA_PIN);
+            buf[i] = r;
+            sdk_os_delay_us(50);
+        }
+        printf("\r\n");
+        printf("Data : %d%d%d%d %d%d%d%d \r\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7]);
+        if (buf[0] == 1 && buf[1] == 1 && buf[2] == 0 && buf[3] == 0) // c : 1101
+        {
+            if (buf[4] == 0 && buf[5] == 0 && buf[6] == 0 && buf[7] == 1) // 0xc1
+            {
+                printf("0xc1 command Received\r\n");
+                hydro_mode = 0; 
+                hydro_timer = 5 * 60;
+                color_mode = 0, key_color_mode = 0;
+                g_count = 0; r_count = 0; b_count = 0;
+                key_g_count = 0; key_r_count = 0; key_b_count = 0;
+                led_forward = true; key_led_forward = true;
+                key_led_mode = 1;
+                led_mode = 1;
+            } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 0 && buf[7] == 1) //0xc5 key led red, main led off
+            {
+                printf("0xc5 command Received\r\n");
+                key_led_mode = 2;
+                led_mode = 99;
+                hydro_timer = 0;
+            } else if (buf[4] == 0 && buf[5] == 0 && buf[6] == 1 && buf[7] == 0) //0xc2
+            {
+                //send_cmd = 1;  //send 0xc1 to pmc
+                //send_cmd = 2;  //send 0xc2 to pmc
+                //send_cmd = 3;  //send 0xcd to pmc
+                hydro_timer = 0; //off hydro
+                led_mode = 99;
+                key_led_mode = 99;
+                printf("0xc2 command Received\r\n");
+            } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 1) //0xc7
+            {
+                printf("0xc7 command Received\r\n");
+                led_mode = 50; 
+                key_led_mode = 50; 
+                hydro_timer = 0;
+                set_led(50, 0, 0); 
+                set_key_led(50, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(0, 0, 0); 
+                set_key_led(0, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(50, 0, 0); 
+                set_key_led(50, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(0, 0, 0); 
+                set_key_led(0, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(50, 0, 0); 
+                set_key_led(50, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(0, 0, 0); 
+                set_key_led(0, 0, 0);
+                //ToDo: send command to PMC
+                send_cmd = 2; 
+            } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 0 && buf[7] == 0) //0xc8
+            {
+                printf("0xc8 command Received\r\n");
+                led_mode = 50; 
+                key_led_mode = 50; 
+                set_led(50, 0, 0); 
+                set_key_led(50, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(0, 0, 0); 
+                set_key_led(0, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(50, 0, 0); 
+                set_key_led(50, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(0, 0, 0); 
+                set_key_led(0, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(50, 0, 0); 
+                set_key_led(50, 0, 0);
+                vTaskDelay(500 / portTICK_PERIOD_MS);
+                set_led(0, 0, 0); 
+                set_key_led(0, 0, 0);
+                //ToDo: send command to PMC
+                send_cmd = 2;
+            } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 0 && buf[7] == 1) //0xc9
+            {
+                printf("0xc9 command Received\r\n");
+                color_mode = 0, key_color_mode = 0;
+                g_count = 0; r_count = 0; b_count = 0;
+                key_g_count = 0; key_r_count = 0; key_b_count = 0;
+                led_forward = true; key_led_forward = true;
+                if (led_mode == 1) {
+                    led_mode = 99;
+                    key_led_mode = 0;
+                } else {
+                    led_mode = 1;   //color led breath mode
+                    key_led_mode = 1;
+                }
+            } else if (buf[4] == 0 && buf[5] == 1 && buf[6] == 1 && buf[7] == 0) //0xc6 
+            {
+                printf("0xc6 command Received\r\n");
+                key_led_mode = 3;
+            } else if (buf[4] == 1 && buf[5] == 0 && buf[6] == 1 && buf[7] == 1) //0xcb
+            {
+                printf("0xcb command Received\r\n");
+                set_device_state();
+                sdk_system_restart();
+                break;
+            }
+        }
+    }
+}
+
 static void signal_task(void *pvParameters)
 {
     while (true)
@@ -454,8 +606,9 @@ static void signal_task(void *pvParameters)
             //Received any signal from PMC, restart timer
             modem_sleep_timer = 0; 
             deep_sleep_timer = 0;
+            ap_count = 0;
             gpio_enable(SDA_PIN, GPIO_INPUT);
-            sdk_os_delay_us(100);
+            sdk_os_delay_us(1000);
             uint8_t buf[8];
             for (uint8_t i = 0; i < 8; i++) {
                 sdk_os_delay_us(50);
@@ -684,9 +837,12 @@ static void topic_received(mqtt_message_data_t *md)
             printf("Setting Hydro\r\n");
             if (((char *)(message->payload))[2] == '1')
             {
-                printf("Hydro ON\r\n");   
+                printf("Hydro ON\r\n");
+                hydro_mode = 0; 
+                hydro_timer = 5 * 60;
             } else {
-                printf("Hydro OFF\r\n");   
+                printf("Hydro OFF\r\n");  
+                hydro_timer = 0; 
             }
         }
     }
@@ -707,12 +863,12 @@ static void wifi_task(void *pvParameters)
 {
     uint8_t status  = 0;
     uint8_t retries = 30;
-
+    vTaskDelay( 5000 / portTICK_PERIOD_MS );
     while(1)
     {
-        const char* ssid_; 
-        const char* password_;
-        read_wifi_config(0, &ssid_, &password_);
+        const char* ssid_ = "TP-LINK_143E"; 
+        const char* password_ = "Leyang@123";
+        //read_wifi_config(0, &ssid_, &password_);
         struct sdk_station_config config; 
         memcpy(&config.ssid, ssid_, strlen((const char *)ssid_) + 1);
         memcpy(&config.password, password_, strlen((const char *)password_) + 1);
@@ -994,26 +1150,30 @@ void user_init(void)
     gpio_init();
     int state = read_device_state();
     reset_device_state();
+    xTaskCreate(&buttonIntTask, "buttonIntTask", 256, &tsqueue, 1, NULL);
     if (state == 0)
     {
         printf("Normal working mode!!!\r\n");
-        xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 1, NULL);
+        //xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
         printf("Create Wifi Task Finished\r\n");
         xTaskCreate(&beat_task, "beat_task", 256, NULL, 1, NULL);
-        xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 1, NULL);
-        xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
         xTaskCreate(&led_task, "led_task", 256, NULL, 1, NULL);
         xTaskCreate(&key_led_task, "key_led_task", 256, NULL, 1, NULL);
         xTaskCreate(&hydro_task, "hydro_task", 256, NULL, 1, NULL);
         xTaskCreate(&send_to_pmc_task, "send_to_pmc_task", 256, NULL, 1, NULL);
+        vTaskDelay( 5000 / portTICK_PERIOD_MS );
+        xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 1, NULL);
+        xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 1, NULL);
     } else if (state == 1) {
         printf("Wifi AP mode...\r\n");
         set_key_led(50, 50, 0);     
         set_led(50, 50, 0);
+        xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
+        xTaskCreate(&ap_count_task, "ap_count_task", 1024, NULL, 1, NULL);
         reset_device_state();
     }
-    //xTaskCreate(&buttonPollTask, "buttonPollTask", 256, NULL, 1, NULL);
+ 
     /*while(1)
     {
         printf("hello....\r\n");
