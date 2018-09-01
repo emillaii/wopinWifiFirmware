@@ -55,7 +55,8 @@ void wifiScanDoneCb(void *arg, sdk_scan_status_t status);
 SemaphoreHandle_t wifi_alive;
 QueueHandle_t publish_queue;
 
-char mqtt_client_id[20];  // this is device id
+char mqtt_client_id[30];  // this is device id
+char mqtt_client_id_sub[30];  // this is device id
 
 const uint32_t wakeupTime = 30*60*1000*1000;
 const int gpio = 14;   /* gpio 0 usually has "PROGRAM" button attached */
@@ -367,6 +368,29 @@ static void hydro_task(void *pvParameters)
             gpio_write(HYDRO_PIN_A, 0);
             gpio_write(HYDRO_PIN_B, 0);
         }
+       
+        if (modem_sleep_timer == 5*60) { // go to modem sleep mode
+            key_led_mode = 99;
+            led_mode = 99;
+            deep_sleep_timer++;
+        } else {
+            modem_sleep_timer++;
+        }
+        if (hydro_timer == 0 && deep_sleep_timer >= 15*60) {  //If finish hydro go to deep sleep mode
+            sdk_system_deep_sleep(wakeupTime);
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+
+static void beat_task(void *pvParameters)
+{
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    char msg[PUB_MSG_LEN];
+    int count = 0;
+
+    while (1) {
+        vTaskDelayUntil(&xLastWakeTime, 10000 / portTICK_PERIOD_MS);
         uint32_t adc_read = sdk_system_adc_read();
         printf("adc_read: %d\r\n", adc_read);
 
@@ -394,32 +418,15 @@ static void hydro_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
             send_cmd = 2;
         }
-        if (modem_sleep_timer == 5*60) { // go to modem sleep mode
-            key_led_mode = 99;
-            led_mode = 99;
-            deep_sleep_timer++;
-        } else {
-            modem_sleep_timer++;
-        }
-        if (hydro_timer == 0 && deep_sleep_timer >= 15*60) {  //If finish hydro go to deep sleep mode
-            sdk_system_deep_sleep(wakeupTime);
-        }
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
-}
-
-static void beat_task(void *pvParameters)
-{
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    char msg[PUB_MSG_LEN];
-    int count = 0;
-
-    while (1) {
-        vTaskDelayUntil(&xLastWakeTime, 10000 / portTICK_PERIOD_MS);
         printf("beat\r\n");
-        snprintf(msg, PUB_MSG_LEN, "Beat %d\r\n", count++);
-        if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
-            printf("Publish queue overflow.\r\n");
+            /* Print date and time each 5 seconds */
+        uint8_t status = sdk_wifi_station_get_connect_status();
+        if (status == STATION_GOT_IP)
+        {
+            snprintf(msg, PUB_MSG_LEN, "P:%d\r\n", (int)((adc_read - 584)*0.422));
+            if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
+                printf("Publish queue overflow.\r\n");
+            }
         }
     }
 }
@@ -768,7 +775,8 @@ static void mqtt_task(void *pvParameters)
             //taskYIELD();
             continue;
         }
-        mqtt_subscribe(&client, mqtt_client_id, MQTT_QOS0, topic_received);
+        //mqtt_subscribe(&client, mqtt_client_id, MQTT_QOS0, topic_received);
+        mqtt_subscribe(&client, mqtt_client_id_sub, MQTT_QOS0, topic_received);
         xQueueReset(publish_queue);
 
         while(1){
@@ -783,7 +791,8 @@ static void mqtt_task(void *pvParameters)
                 message.dup = 0;
                 message.qos = MQTT_QOS0;
                 message.retained = 0;
-                ret = mqtt_publish(&client, "beat", &message);
+                //ret = mqtt_publish(&client, "beat", &message);
+                ret = mqtt_publish(&client, mqtt_client_id, &message);
                 if (ret != MQTT_SUCCESS ){
                     printf("error while publishing message: %d\n", ret );
                     break;
@@ -845,6 +854,21 @@ static void topic_received(mqtt_message_data_t *md)
                 hydro_timer = 0; 
             }
         }
+    } else if ((int)message->payloadlen == 3) {
+        printf("Setting Cleaning\r\n");
+        if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '3' ) //Setting Clean
+        {
+            printf("Setting Cleaning\r\n");
+            if (((char *)(message->payload))[2] == '1')
+            {
+                printf("Cleaning ON\r\n");
+                hydro_mode = 1; 
+                hydro_timer = 5 * 60;
+            } else {
+                printf("Cleaning OFF\r\n");  
+                hydro_timer = 0; 
+            }
+        }
     }
     else if ((int)message->payloadlen == 5) {
         if (((char *)(message->payload))[0] == 's' && ((char *)(message->payload))[1] == 'l' &&
@@ -863,12 +887,13 @@ static void wifi_task(void *pvParameters)
 {
     uint8_t status  = 0;
     uint8_t retries = 30;
-    vTaskDelay( 5000 / portTICK_PERIOD_MS );
     while(1)
     {
-        const char* ssid_ = "TP-LINK_143E"; 
-        const char* password_ = "Leyang@123";
-        //read_wifi_config(0, &ssid_, &password_);
+        //const char* ssid_ = "EmilWin"; 
+        //const char* password_ = "Laikwoktai";
+        const char* ssid_;
+        const char* password_;
+        read_wifi_config(0, &ssid_, &password_);
         struct sdk_station_config config; 
         memcpy(&config.ssid, ssid_, strlen((const char *)ssid_) + 1);
         memcpy(&config.password, password_, strlen((const char *)password_) + 1);
@@ -921,8 +946,10 @@ static void ap_task(void *pvParameters)
     struct ip_info ap_ip;
     bool isWifiSet = false;
     //while(1) {
-        xSemaphoreGive( wifi_alive );
+        //xSemaphoreGive( wifi_alive );
         printf("Setting AP mode....\r\n");
+
+        sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_set_opmode(STATIONAP_MODE);
         IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
         IP4_ADDR(&ap_ip.gw, 0, 0, 0, 0);
@@ -939,6 +966,7 @@ static void ap_task(void *pvParameters)
             .max_connection = 1,
             .beacon_interval = 100,
         };
+        sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_softap_set_config(&ap_config);
 
         ip_addr_t first_client_ip;
@@ -967,11 +995,25 @@ static void ap_task(void *pvParameters)
                     u16_t len;
                     netbuf_data(nb, &data, &len);
                     printf("Received data:\n%.*s\n", len, (char*) data);
-
+                    ap_count = 0; //reset the ap timer counter
                     int ret = parse_http_header(data);
                     if (ret == 0)
                     {
-                        //Test the wifi 
+                        //Test the wifi
+                        printf("sending response....\r\n");
+                        snprintf(buf, sizeof(buf),
+                                "HTTP/1.1 200 OK\r\n"
+                                "Content-type: text/html\r\n\r\n"
+                                );
+                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                        sprintf(buf, "{\"device_id\": \"%s\", \"status\": \"Connecting\"}\n", mqtt_client_id);
+                        printf("%s\r\n", buf);
+                        netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                        netbuf_delete(nb);
+                        printf("Closing connection\n");
+                        netconn_close(client);
+                        netconn_delete(client);
+
                         const char* ssid_; 
                         const char* password_;
                         uint8_t status  = 0;
@@ -980,43 +1022,34 @@ static void ap_task(void *pvParameters)
                         struct sdk_station_config config; 
                         memcpy(&config.ssid, ssid_, strlen((const char *)ssid_) + 1);
                         memcpy(&config.password, password_, strlen((const char *)password_) + 1);
-                        printf("WiFi: connecting to WiFi SSID:%s PW:%s\n\r", config.ssid, config.password);
+                        printf("AP Mode WiFi: connecting to WiFi SSID:%s PW:%s\n\r", config.ssid, config.password);
                         sdk_wifi_station_set_config(&config);
                         sdk_wifi_station_connect();
-                        while ((status != STATION_GOT_IP) && (retries)){
-                            status = sdk_wifi_station_get_connect_status();
-                            printf("%s: status = %d\n\r", __func__, status );
-                            if( status == STATION_WRONG_PASSWORD ){
+
+                        while ((status != STATION_GOT_IP) && (retries > 0)){
+                             printf("Checking wifi status\r\n");
+                             status = sdk_wifi_station_get_connect_status();
+                             printf("%s: status = %d\n\r", __func__, status );
+                             if( status == STATION_WRONG_PASSWORD ){
                                 printf("WiFi: wrong password\n\r");
                                 break;
-                            } else if( status == STATION_NO_AP_FOUND ) {
+                             } else if( status == STATION_NO_AP_FOUND ) {
                                 printf("WiFi: AP not found\n\r");
                                 break;
-                            } else if( status == STATION_CONNECT_FAIL ) {
+                             } else if( status == STATION_CONNECT_FAIL ) {
                                 printf("WiFi: connection failed\r\n");
                                 break;
-                            }
-                            vTaskDelay( 1000 / portTICK_PERIOD_MS );
-                            --retries;
+                             }
+                             vTaskDelay( 1000 / portTICK_PERIOD_MS );
+                             --retries;
                         }
 
                         if (status == STATION_GOT_IP) {
                             isWifiSet = true;
                             set_led(0, 50, 0);
-                            printf("WiFi: Connected..\n\r");
-                            snprintf(buf, sizeof(buf),
-                                "HTTP/1.1 200 OK\r\n"
-                                "Content-type: text/html\r\n\r\n"
-                                );
-                            netconn_write(client, buf, strlen(buf), NETCONN_COPY);
-                            sprintf(buf, "{\"device_id\": \"%s\", \"status\": \"Connected\"}\n", mqtt_client_id);
-                            netconn_write(client, buf, strlen(buf), NETCONN_COPY);
-                        } else {
+                        } else { //Connection Fail
+                            sdk_wifi_station_disconnect();
                             set_led(50, 0, 0);
-                            snprintf(buf, sizeof(buf),
-                                "HTTP/1.1 200 OK\r\n"
-                                "Content-type: text/html\r\n\r\n"
-                                "{\"device_id\": \"%s\", \"status\": \"Fail\"}\r\n", mqtt_client_id);
                         }
                         //End
                     } else if (ret == 1)
@@ -1048,6 +1081,10 @@ static void ap_task(void *pvParameters)
                                 }
                             }
                         }
+                        netbuf_delete(nb);
+                        printf("Closing connection\n");
+                        netconn_close(client);
+                        netconn_delete(client);
                     } else if (ret == 2)
                     {
                         printf("Going to reboot..");
@@ -1059,15 +1096,14 @@ static void ap_task(void *pvParameters)
                         netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                     }
                 }
-                netbuf_delete(nb);
             }
             printf("Closing connection\n");
-            netconn_close(client);
-            netconn_delete(client);
             if (isWifiSet) {
+                set_device_state();
                 printf("Wifi is configured by user\n\r");
-                vTaskDelay( 1000 / portTICK_PERIOD_MS );
                 break;
+                // vTaskDelay( 10000 / portTICK_PERIOD_MS );
+                // send_cmd = 2;
             }
         }
     //}
@@ -1140,19 +1176,24 @@ void user_init(void)
     strcpy(mqtt_client_id, "WOPIN-");
     strcat(mqtt_client_id, get_my_id());
 
+    memset(mqtt_client_id_sub, 0, sizeof(mqtt_client_id_sub));
+    strcpy(mqtt_client_id_sub, "WOPIN-");
+    strcat(mqtt_client_id_sub, get_my_id());
+    strcat(mqtt_client_id_sub, "-D");
+
     uart_set_baud(0, 115200);
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
     printf("Device id:%s\n", mqtt_client_id);
-
-    vSemaphoreCreateBinary(wifi_alive);
-    publish_queue = xQueueCreate(3, PUB_MSG_LEN);
+    printf("Device id sub:%s\n", mqtt_client_id_sub);
     init_led();
     gpio_init();
     int state = read_device_state();
     reset_device_state();
-    xTaskCreate(&buttonIntTask, "buttonIntTask", 256, &tsqueue, 1, NULL);
+    //xTaskCreate(&buttonIntTask, "buttonIntTask", 256, &tsqueue, 1, NULL);
     if (state == 0)
     {
+        vSemaphoreCreateBinary(wifi_alive);
+        publish_queue = xQueueCreate(3, PUB_MSG_LEN);
         printf("Normal working mode!!!\r\n");
         //xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
         printf("Create Wifi Task Finished\r\n");
@@ -1168,16 +1209,10 @@ void user_init(void)
         printf("Wifi AP mode...\r\n");
         set_key_led(50, 50, 0);     
         set_led(50, 50, 0);
-        xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
+        //xTaskCreate(&signal_task, "signal_task", 256, NULL, 1, NULL);
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
         xTaskCreate(&ap_count_task, "ap_count_task", 1024, NULL, 1, NULL);
         reset_device_state();
     }
- 
-    /*while(1)
-    {
-        printf("hello....\r\n");
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-    }*/
 }
 
