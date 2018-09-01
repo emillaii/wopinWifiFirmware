@@ -19,6 +19,115 @@
 #include <paho_mqtt_c/MQTTClient.h>
 #include "colorLed.h"
 
+#include "http_client_ota.h"
+//OTA Related
+
+#define BINARY_PATH "/access_point_new.bin"
+#define SHA256_PATH "/access_point_new.sha256"
+
+char binary_filename[30];
+char sha256_filename[30];
+
+#define SERVER "192.168.1.110"
+#define PORT "8080"
+
+
+static inline void ota_error_handling(OTA_err err) {
+    printf("Error:");
+
+    switch(err) {
+    case OTA_DNS_LOOKUP_FALLIED:
+        printf("DNS lookup has fallied\n");
+        break;
+    case OTA_SOCKET_ALLOCATION_FALLIED:
+        printf("Impossible allocate required socket\n");
+        break;
+    case OTA_SOCKET_CONNECTION_FALLIED:
+        printf("Server unreachable, impossible connect\n");
+        break;
+    case OTA_SHA_DONT_MATCH:
+        printf("Sha256 sum does not fit downloaded sha256\n");
+        break;
+    case OTA_REQUEST_SEND_FALLIED:
+        printf("Impossible send HTTP request\n");
+        break;
+    case OTA_DOWLOAD_SIZE_NOT_MATCH:
+        printf("Dowload size don't match with server declared size\n");
+        break;
+    case OTA_ONE_SLOT_ONLY:
+        printf("rboot has only one slot configured, impossible switch it\n");
+        break;
+    case OTA_FAIL_SET_NEW_SLOT:
+        printf("rboot cannot switch between rom\n");
+        break;
+    case OTA_IMAGE_VERIFY_FALLIED:
+        printf("Dowloaded image binary checksum is fallied\n");
+        break;
+    case OTA_UPDATE_DONE:
+        printf("Ota has completed upgrade process, all ready for system software reset\n");
+        break;
+    case OTA_HTTP_OK:
+        printf("HTTP server has response 200, Ok\n");
+        break;
+    case OTA_HTTP_NOTFOUND:
+        printf("HTTP server has response 404, file not found\n");
+        break;
+    }
+}
+
+bool ota_start = false;
+static void ota_task(void *PvParameter)
+{
+    // Wait until we have joined AP and are assigned an IP *
+    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP)
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+    while (1) {
+        if (ota_start)
+        {
+            OTA_err err;
+            // Remake this task until ota work
+
+            ota_info info = {
+                .server      = SERVER,
+                .port        = PORT,
+                .binary_path = binary_filename,
+                .sha256_path = sha256_filename,
+            };
+
+            err = ota_update(&info);
+            ota_error_handling(err);
+
+            if(err != OTA_UPDATE_DONE) {
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                printf(".....\n\n\n");
+                continue;
+            }
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            printf("Delay 1\n");
+            
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            printf("Delay 2\n");
+            
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            printf("Delay 3\n");
+
+            printf("Reset\n");
+            sdk_system_restart();
+        } else {
+            vTaskDelay(10000 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
+static ota_info ota_info_ = {
+    .server      = SERVER,
+    .port        = PORT,
+    .binary_path = BINARY_PATH,
+    .sha256_path = SHA256_PATH,
+};
+// End of ota task
+
 #define MQTT_HOST ("wifi.h2popo.com")
 #define MQTT_PORT 8083
 
@@ -418,12 +527,13 @@ static void beat_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
             send_cmd = 2;
         }
-        printf("beat\r\n");
+        int power = (int)(adc_read - 584)*0.422;
+        printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
         uint8_t status = sdk_wifi_station_get_connect_status();
         if (status == STATION_GOT_IP)
         {
-            snprintf(msg, PUB_MSG_LEN, "P:%d\r\n", (int)((adc_read - 584)*0.422));
+            snprintf(msg, PUB_MSG_LEN, "P:%d", power);
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
             }
@@ -868,7 +978,7 @@ static void topic_received(mqtt_message_data_t *md)
                 printf("Cleaning OFF\r\n");  
                 hydro_timer = 0; 
             }
-        }
+        } 
     }
     else if ((int)message->payloadlen == 5) {
         if (((char *)(message->payload))[0] == 's' && ((char *)(message->payload))[1] == 'l' &&
@@ -879,7 +989,24 @@ static void topic_received(mqtt_message_data_t *md)
         }
     }
     else if ((int)message->payloadlen == 6) {
-        close_led();
+        if (((char *)(message->payload))[0] == 'o' && ((char *)(message->payload))[1] == 't' &&
+                   ((char *)(message->payload))[2] == 'a')
+        {
+            printf("Receive OTA request\r\n");
+            char v[3] = "000";
+            v[0] = ((char *)(message->payload))[3];
+            v[1] = ((char *)(message->payload))[4];
+            v[2] = ((char *)(message->payload))[5];
+            memset(binary_filename, 0, sizeof(binary_filename));
+            memset(sha256_filename, 0, sizeof(sha256_filename));
+            strcpy(binary_filename, "wopin_");
+            strcat(binary_filename, v);
+            strcat(sha256_filename, binary_filename);
+            strcat(binary_filename, ".bin");
+            strcat(sha256_filename, ".sha");
+            printf("binary_filename : %s sha_filename : %s\r\n", binary_filename, sha256_filename);
+            ota_start = true;
+        }
     }
 }
 
@@ -1172,6 +1299,7 @@ void wifiScanDoneCb(void *arg, sdk_scan_status_t status) {
 
 void user_init(void)
 {
+    printf("I am version 1\r\n");
     memset(mqtt_client_id, 0, sizeof(mqtt_client_id));
     strcpy(mqtt_client_id, "WOPIN-");
     strcat(mqtt_client_id, get_my_id());
@@ -1205,6 +1333,7 @@ void user_init(void)
         vTaskDelay( 5000 / portTICK_PERIOD_MS );
         xTaskCreate(&wifi_task, "wifi_task", 1024, NULL, 1, NULL);
         xTaskCreate(&mqtt_task, "mqtt_task", 1024, NULL, 1, NULL);
+        xTaskCreate(&ota_task, "get_task", 4096, &ota_info_, 1, NULL);
     } else if (state == 1) {
         printf("Wifi AP mode...\r\n");
         set_key_led(50, 50, 0);     
