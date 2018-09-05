@@ -104,13 +104,10 @@ static void ota_task(void *PvParameter)
             }
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             printf("Delay 1\n");
-            
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             printf("Delay 2\n");
-            
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             printf("Delay 3\n");
-
             printf("Reset\n");
             sdk_system_restart();
         } else {
@@ -137,7 +134,6 @@ static ota_info ota_info_ = {
 
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
-
 
 #define SCL_PIN (14)            //D5
 #define SDA_PIN (2)             //D4
@@ -234,7 +230,6 @@ static void hydro_task(void *pvParameters)
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
-
 
 char sendCnt = 0;
 static void soft_uart_task(void *pvParameters)
@@ -410,7 +405,7 @@ static void mqtt_task(void *pvParameters)
             char msg[PUB_MSG_LEN - 1] = "\0";
             while(xQueueReceive(publish_queue, (void *)msg, 0) ==
                   pdTRUE){
-                printf("got message to publish\r\n");
+                //printf("got message to publish\r\n");
                 mqtt_message_t message;
                 message.payload = msg;
                 message.payloadlen = PUB_MSG_LEN;
@@ -580,18 +575,8 @@ static void wifi_task(void *pvParameters)
             --retries;
         }
 
-        // if (status == STATION_GOT_IP) {
-        //     printf("WiFi: Connected\n\r");
-        //     sdk_wifi_set_sleep_type(WIFI_SLEEP_MODEM);
-        //     printf("MODEM Mode\n\r");
-        //     xSemaphoreGive( wifi_alive );
-        //     //taskYIELD();
-        // }
-
         while ((status = sdk_wifi_station_get_connect_status()) == STATION_GOT_IP) {
-            //printf("WiFi: Connected\n\r");
             xSemaphoreGive( wifi_alive );
-            //taskYIELD()
             vTaskDelay( 2000 / portTICK_PERIOD_MS );
         }
         printf("WiFi: disconnected\n\r");
@@ -611,7 +596,7 @@ static void ap_task(void *pvParameters)
 
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_set_opmode(STATIONAP_MODE);
-        IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
+        IP4_ADDR(&ap_ip.ip, 172, 16, 0, 123);
         IP4_ADDR(&ap_ip.gw, 0, 0, 0, 0);
         IP4_ADDR(&ap_ip.netmask, 255, 255, 0, 0);
         sdk_wifi_set_ip_info(1, &ap_ip);
@@ -670,7 +655,6 @@ static void ap_task(void *pvParameters)
                         printf("%s\r\n", buf);
                         netconn_write(client, buf, strlen(buf), NETCONN_COPY);
                         netbuf_delete(nb);
-                        printf("Closing connection\n");
                         netconn_close(client);
                         netconn_delete(client);
 
@@ -740,7 +724,6 @@ static void ap_task(void *pvParameters)
                             }
                         }
                         netbuf_delete(nb);
-                        printf("Closing connection\n");
                         netconn_close(client);
                         netconn_delete(client);
                     } else if (ret == 2)
@@ -752,12 +735,18 @@ static void ap_task(void *pvParameters)
                                 "Content-type: text/html\r\n\r\n"
                                 );
                         netconn_write(client, buf, strlen(buf), NETCONN_COPY);
+                    } else {
+                        netbuf_delete(nb);
+                        netconn_close(client);
+                        netconn_delete(client);
                     }
                 }
             }
             printf("Closing connection\n");
             if (isWifiSet) {
+                //ToDo: This is for testing only
                 set_device_state();
+                //
                 printf("Wifi is configured by user\n\r");
                 break;
             }

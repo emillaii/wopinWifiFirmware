@@ -161,5 +161,5 @@ int parse_http_header(char *header)
         memory_read();
         return 0;
     }
-    return 0;
+    return 3;
 }
