@@ -28,8 +28,8 @@
 char binary_filename[30];
 char sha256_filename[30];
 
-#define SERVER "192.168.1.110"
-#define PORT "8080"
+#define OTA_SERVER "wifi.h2popo.com"
+#define OTA_PORT "8084"
 
 static inline void ota_error_handling(OTA_err err) {
     printf("ota_error_handling:");
@@ -88,8 +88,8 @@ static void ota_task(void *PvParameter)
             // Remake this task until ota work
 
             ota_info info = {
-                .server      = SERVER,
-                .port        = PORT,
+                .server      = OTA_SERVER,
+                .port        = OTA_PORT,
                 .binary_path = binary_filename,
                 .sha256_path = sha256_filename,
             };
