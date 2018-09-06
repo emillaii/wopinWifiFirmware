@@ -117,8 +117,8 @@ static void ota_task(void *PvParameter)
 }
 
 static ota_info ota_info_ = {
-    .server      = SERVER,
-    .port        = PORT,
+    .server      = OTA_SERVER,
+    .port        = OTA_PORT,
     .binary_path = BINARY_PATH,
     .sha256_path = SHA256_PATH,
 };
@@ -156,6 +156,7 @@ void wifiScanDoneCb(void *arg, sdk_scan_status_t status);
 
 SemaphoreHandle_t wifi_alive;
 QueueHandle_t publish_queue;
+QueueHandle_t publish_queue_1;
 
 char mqtt_client_id[30];  // this is device id
 char mqtt_client_id_sub[30];  // this is device id
@@ -313,6 +314,9 @@ static void beat_task(void *pvParameters)
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
             }
+            if (xQueueSend(publish_queue_1, (void *)msg, 0) == pdFALSE) {
+                printf("Publish queue 1 overflow.\r\n");
+            }
         }
     }
 }
@@ -399,6 +403,7 @@ static void mqtt_task(void *pvParameters)
         //mqtt_subscribe(&client, mqtt_client_id, MQTT_QOS0, topic_received);
         mqtt_subscribe(&client, mqtt_client_id_sub, MQTT_QOS0, topic_received);
         xQueueReset(publish_queue);
+        xQueueReset(publish_queue_1);
 
         while(1){
 
@@ -414,6 +419,23 @@ static void mqtt_task(void *pvParameters)
                 message.retained = 0;
                 //ret = mqtt_publish(&client, "beat", &message);
                 ret = mqtt_publish(&client, mqtt_client_id, &message);
+                if (ret != MQTT_SUCCESS ){
+                    printf("error while publishing message: %d\n", ret );
+                    break;
+                }
+            }
+
+            while(xQueueReceive(publish_queue_1, (void *)msg, 0) ==
+                  pdTRUE){
+                //printf("got message to publish\r\n");
+                mqtt_message_t message;
+                message.payload = msg;
+                message.payloadlen = PUB_MSG_LEN;
+                message.dup = 0;
+                message.qos = MQTT_QOS0;
+                message.retained = 0;
+                //ret = mqtt_publish(&client, "beat", &message);
+                ret = mqtt_publish(&client, "drink", &message);
                 if (ret != MQTT_SUCCESS ){
                     printf("error while publishing message: %d\n", ret );
                     break;
@@ -838,6 +860,7 @@ void user_init(void)
     {
         vSemaphoreCreateBinary(wifi_alive);
         publish_queue = xQueueCreate(3, PUB_MSG_LEN);
+        publish_queue_1 = xQueueCreate(3, PUB_MSG_LEN);
         printf("Normal working mode!\r\n");
         xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
         xTaskCreate(&beat_task, "beat_task", 256, NULL, 1, NULL);
