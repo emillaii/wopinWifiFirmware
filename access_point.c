@@ -524,9 +524,17 @@ static void topic_received(mqtt_message_data_t *md)
                 printf("Cleaning ON\r\n");
                 hydro_mode = 1; 
                 hydro_timer = 5 * 60;
+                if (!send_status) { 
+                    send_to_pmc_data[0] = 0xc3;
+                    sendCnt = 0;
+                }
             } else {
                 printf("Cleaning OFF\r\n");  
                 hydro_timer = 0; 
+                if (!send_status) { 
+                    send_to_pmc_data[0] = 0xb4;
+                    sendCnt = 0;
+                }
             }
         } 
     }
