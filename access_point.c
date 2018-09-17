@@ -135,12 +135,23 @@ static ota_info ota_info_ = {
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
 
-#define SCL_PIN (14)            //D5
-#define SDA_PIN (2)             //D4
+//#define SCL_PIN (14)            //D5
+//#define SDA_PIN (2)             //D4
 #define RX_PIN 5                //D1--5 
 #define TX_PIN 4                //D2--4
-#define HYDRO_PIN_A (1)
-#define HYDRO_PIN_B (3)
+//#define HYDRO_PIN_A (1)
+//#define HYDRO_PIN_B (3)
+
+#define TURNON   0xc1
+#define TURNOFF  0xb2
+#define CELANON  0xc3
+#define CLEANOFF 0xb4
+#define CHGMODE  0xc5
+#define PWMCOLOR 0xb6
+#define ILEVEL   0xc7
+#define VLEVEL   0xb8
+#define STANDBY  0xc9
+#define APMODE   0xcb   
 
 static void wifi_task(void *pvParameters);
 
@@ -164,7 +175,9 @@ char mqtt_client_id_sub[30];  // this is device id
 char send_to_pmc_data[20]={'\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n'};
 char read_from_pmc_data[20]={'\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n'};
 static bool send_status = 0;                //if send data to MCU, set true
-static bool send_check = 1;
+static int ap_count = 0;
+uint16_t sendCnt = 0;
+uint8_t sendDataCnt = 0;
 
 const uint32_t wakeupTime = 30*60*1000*1000;
 
@@ -203,89 +216,121 @@ static void hydro_task(void *pvParameters)
 {
     while(1) {
         if (hydro_timer != 0) {
-            if (hydro_mode == 0) {
+ /*           if (hydro_mode == 0) {
                 gpio_write(HYDRO_PIN_A, 0);
                 gpio_write(HYDRO_PIN_B, 1);
             } else {
                 gpio_write(HYDRO_PIN_A, 1);
                 gpio_write(HYDRO_PIN_B, 0);
-            }
+            }                                   //*/
             hydro_timer--;
             printf("hydro...%d\r\n", hydro_timer);
             if (hydro_timer == 0) { // If timer count down to 0 success, then send 0xc2 to pmc
-
+                if(!send_status)
+                {
+                    send_to_pmc_data[0] = TURNOFF;
+                    send_to_pmc_data[1] = 10;
+                    sendDataCnt = 1;                    
+                    sendCnt = 0;
+                    send_status = 1;
+                }
             }
-        } else {
+        } 
+ /*       else {
             gpio_write(HYDRO_PIN_A, 0);
             gpio_write(HYDRO_PIN_B, 0);
-        }
-       
-        if (modem_sleep_timer == 5*60) { // go to modem sleep mode
-            deep_sleep_timer++;
-        } else {
+        }       //*/
+        if(hydro_timer == 0)
+        {
             modem_sleep_timer++;
-        }
-        if (hydro_timer == 0 && deep_sleep_timer >= 15*60) {  //If finish hydro go to deep sleep mode
+            if(modem_sleep_timer >= 1*60)
+            {
+                deep_sleep_timer++;
+                modem_sleep_timer = 0;
+            }            
+        }       
+        if (hydro_timer == 0 && deep_sleep_timer >= 1) {  //If finish hydro go to deep sleep mode
+            if(send_status&&(send_to_pmc_data[0] == TURNOFF))
+                continue;
+            deep_sleep_timer = 0;
+            modem_sleep_timer = 0;
             sdk_system_deep_sleep(wakeupTime);
         }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
-char sendCnt = 0;
 static void soft_uart_task(void *pvParameters)
 {
+    uint8_t tempSUart;
     // setup software uart to 9600 8n1
     softuart_open(0, 9600, RX_PIN, TX_PIN);
     while (true)
     {
-        if((send_to_pmc_data[0]!='\n')&&(sendCnt<10))
+        if(send_status&&(sendCnt<100))
         {
             softuart_put(0,send_to_pmc_data[0]);
             printf("send %x \r\n",send_to_pmc_data[0]);
-            send_status = 1;
-            send_check = 0;                             //send 10 times fail
             sendCnt++;
         }
+        else if(sendCnt>=100)
+        {
+            printf("%x send failed\r\n",send_to_pmc_data[0]);
+            send_status = 0;            
+            sendCnt = 0;
+        }       //*/
 
-        sdk_os_delay_us(1000);
+        sdk_os_delay_us(2000);
 
         if (!softuart_available(0))
             continue;
 
         char c = softuart_read(0);
-        if(send_status&&sendCnt<10)
+        printf("input :%c, 0x%02x\n",c,c);        
+        if(send_status&&sendCnt<100)
         {
             if(c == send_to_pmc_data[0])
             {
-                send_status = 0;
-                send_to_pmc_data[0] = '\n';
-                sendCnt = 0;
+                if(sendDataCnt)
+                {
+                    for(tempSUart = 0; tempSUart<sendDataCnt; tempSUart++)
+                    {
+                        send_to_pmc_data[tempSUart] = send_to_pmc_data[tempSUart+1];                       
+                    }
+                    send_status = 1;
+                    sendDataCnt--;
+                }
+                else
+                    send_status = 0;
+                sendCnt = 0;                 
             }
         }
         else
         {
             softuart_put(0,c);
-            printf("send :%c, 0x%02x\n",c,c);
-        }
-        printf("input: %c, 0x%02x\n", c, c);
-        if (c == 0xc1) {           // Hydro On
-            hydro_mode = 0; 
-            hydro_timer = 5 * 60;
-        } else if (c == 0xb2) {    // Hydro Off
-            hydro_timer = 0;
-        } else if (c == 0xb4) {    // Clean Off
-            hydro_timer = 0; 
-        } else if (c == 0xc7) {    // Receive over current
+            if (c == TURNON) {           // Hydro On
+                hydro_mode = 0; 
+                hydro_timer = 5 * 60;
+            } else if (c == TURNOFF) {    // Hydro Off
+                hydro_timer = 0;
+                if(ap_count)
+                {
+                    ap_count=0;
+                    sdk_system_deep_sleep(wakeupTime);
+                }
+            } else if (c == CLEANOFF) {    // Clean Off
+                hydro_timer = 0; 
+            } else if (c == ILEVEL) {    // Receive over current
 
-        } else if (c == 0xc8) {    // Receive over voltage
+            } else if (c == VLEVEL) {    // Receive over voltage
 
-        } else if (c == 0xc5) {    // Receive charging status
-
-        } else if (c == 0xcb) {    // Go To Ap Mode
-            set_device_state();
-            sdk_system_restart();
-            break;
+            } else if (c == CHGMODE) {    // Receive charging status
+                hydro_timer = 0;       //
+            } else if (c == APMODE) {    // Go To Ap Mode
+                set_device_state();
+                sdk_system_restart();
+                break;
+            }            
         }
     }
 } 
@@ -300,10 +345,10 @@ static void beat_task(void *pvParameters)
         uint32_t adc_read = sdk_system_adc_read();
         printf("adc_read: %d\r\n", adc_read);
 
-        if (adc_read <= 537) {
+/*        if (adc_read <= 537) {
             gpio_write(HYDRO_PIN_A, 0);
             gpio_write(HYDRO_PIN_B, 0);
-        }
+        }                                       //*/
         int power = (int)(adc_read - 584)*0.422;
         printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
@@ -346,16 +391,30 @@ static const char* get_my_id(void)
     return my_id;
 }
 
-int ap_count = 0;
+
 static void ap_count_task(void *pvParameters)
 {
     while(1)
     {
-        if (ap_count == 3 * 60) {
+        ap_count++;
+        if (ap_count >= 3 * 60) {
             printf("AP Mode Timeout\r\n");
+            send_to_pmc_data[0] = TURNOFF;
+            send_to_pmc_data[1] = 10;
+            sendDataCnt = 1;            
+            send_status = 1;
+            sendCnt = 0;
+            if(send_status)
+                continue;
             sdk_system_deep_sleep(wakeupTime); 
         }
-        ap_count++;
+/*        if(!send_status)
+        {
+            if((ap_count&0x00ff)==0xb2)
+                ap_count=0xd0;
+            send_to_pmc_data[0] = ap_count;
+            sendCnt = 0;
+        }                                           //*/
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
 }
@@ -480,15 +539,22 @@ static void topic_received(mqtt_message_data_t *md)
             uint8_t r_val = (uint8_t) strtol(r, NULL, 16);
             uint8_t g_val = (uint8_t) strtol(g, NULL, 16);
             uint8_t b_val = (uint8_t) strtol(b, NULL, 16);
+            if(r_val == 10)
+                r_val++;
+            if(g_val == 10)
+                g_val++;
+            if(b_val == 10)
+                b_val++;
             printf("r : %d g: %d b: %d \r\n", r_val, g_val, b_val);
-            if (!send_status) { 
-                send_to_pmc_data[0] = r_val;
-                send_to_pmc_data[1] = g_val;
-                send_to_pmc_data[2] = b_val;
-                send_to_pmc_data[3] = r_val;
-                send_to_pmc_data[4] = g_val;
-                send_to_pmc_data[5] = b_val;
+            if(!send_status)  { 
+                send_to_pmc_data[0] = PWMCOLOR;
+                send_to_pmc_data[1] = r_val;
+                send_to_pmc_data[2] = g_val;
+                send_to_pmc_data[3] = b_val;
+                send_to_pmc_data[4] = 10;                           //end byte
+                sendDataCnt = 4;
                 sendCnt = 0;
+                send_status = 1;
             }
             //set_led(r_val, g_val, b_val);
             //set_key_led(r_val, g_val, b_val);
@@ -503,14 +569,20 @@ static void topic_received(mqtt_message_data_t *md)
                 hydro_timer = 5 * 60;
                 if (!send_status) { 
                     send_to_pmc_data[0] = 0xc1;
-                    sendCnt = 0;
+                    send_to_pmc_data[1] = 10;
+                    sendDataCnt = 1;
+                    sendCnt = 0;                    
+                    send_status = 1;
                 }
             } else {
                 printf("Hydro OFF\r\n");  
                 hydro_timer = 0;
                 if (!send_status) { 
-                    send_to_pmc_data[0] = 0xb2;
+                    send_to_pmc_data[0] = STANDBY;
+                    send_to_pmc_data[1] = 10;
+                    sendDataCnt = 1;                    
                     sendCnt = 0;
+                    send_status = 1;
                 }
             }
         }
@@ -526,14 +598,20 @@ static void topic_received(mqtt_message_data_t *md)
                 hydro_timer = 5 * 60;
                 if (!send_status) { 
                     send_to_pmc_data[0] = 0xc3;
+                    send_to_pmc_data[1] = 10;
+                    sendDataCnt = 1;                    
                     sendCnt = 0;
+                    send_status = 1;
                 }
             } else {
                 printf("Cleaning OFF\r\n");  
                 hydro_timer = 0; 
                 if (!send_status) { 
                     send_to_pmc_data[0] = 0xb4;
+                    send_to_pmc_data[1] = 10;
+                    sendDataCnt = 1;                    
                     sendCnt = 0;
+                    send_status = 1;
                 }
             }
         } 
@@ -626,7 +704,7 @@ static void ap_task(void *pvParameters)
 
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_set_opmode(STATIONAP_MODE);
-        IP4_ADDR(&ap_ip.ip, 172, 16, 0, 123);
+        IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
         IP4_ADDR(&ap_ip.gw, 0, 0, 0, 0);
         IP4_ADDR(&ap_ip.netmask, 255, 255, 0, 0);
         sdk_wifi_set_ip_info(1, &ap_ip);
@@ -880,6 +958,7 @@ void user_init(void)
         printf("Wifi AP mode!\r\n");
         xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
         xTaskCreate(&ap_count_task, "ap_count_task", 1024, NULL, 1, NULL);
+        xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
         reset_device_state();
     }
 }
