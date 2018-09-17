@@ -347,7 +347,8 @@ static void beat_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
         }                                       //*/
         int power = (int)(adc_read - 584)*0.422;
-        printf("sending status P:%dH:%dM:%d\r\n", power, hydro_timer, hydro_mode);
+        //printf("sending status P:%dH:%dM:%d\r\n", power, hydro_timer, hydro_mode);
+        printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
         uint8_t status = sdk_wifi_station_get_connect_status();
         if (status == STATION_GOT_IP)
