@@ -144,14 +144,16 @@ static ota_info ota_info_ = {
 
 #define TURNON   0xc1
 #define TURNOFF  0xb2
-#define CELANON  0xc3
+#define CLEANON  0xc3
 #define CLEANOFF 0xb4
+#define TURNOFFLED 0xba
 #define CHGMODE  0xc5
 #define PWMCOLOR 0xb6
 #define ILEVEL   0xc7
 #define VLEVEL   0xb8
 #define STANDBY  0xc9
-#define APMODE   0xcb   
+#define APMODE   0xcb
+
 
 static void wifi_task(void *pvParameters);
 
@@ -216,13 +218,6 @@ static void hydro_task(void *pvParameters)
 {
     while(1) {
         if (hydro_timer != 0) {
- /*           if (hydro_mode == 0) {
-                gpio_write(HYDRO_PIN_A, 0);
-                gpio_write(HYDRO_PIN_B, 1);
-            } else {
-                gpio_write(HYDRO_PIN_A, 1);
-                gpio_write(HYDRO_PIN_B, 0);
-            }                                   //*/
             hydro_timer--;
             printf("hydro...%d\r\n", hydro_timer);
             if (hydro_timer == 0) { // If timer count down to 0 success, then send 0xc2 to pmc
@@ -236,10 +231,6 @@ static void hydro_task(void *pvParameters)
                 }
             }
         } 
- /*       else {
-            gpio_write(HYDRO_PIN_A, 0);
-            gpio_write(HYDRO_PIN_B, 0);
-        }       //*/
         if(hydro_timer == 0)
         {
             modem_sleep_timer++;
@@ -254,7 +245,10 @@ static void hydro_task(void *pvParameters)
                 continue;
             deep_sleep_timer = 0;
             modem_sleep_timer = 0;
-            sdk_system_deep_sleep(wakeupTime);
+            set_device_deepsleep();
+            sdk_system_restart();
+            break;
+            //sdk_system_deep_sleep(wakeupTime);
         }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
@@ -316,7 +310,10 @@ static void soft_uart_task(void *pvParameters)
                 if(ap_count)
                 {
                     ap_count=0;
-                    sdk_system_deep_sleep(wakeupTime);
+                    set_device_deepsleep();
+                    sdk_system_restart();
+                    break;
+                    //sdk_system_deep_sleep(wakeupTime);
                 }
             } else if (c == CLEANOFF) {    // Clean Off
                 hydro_timer = 0; 
@@ -350,7 +347,7 @@ static void beat_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
         }                                       //*/
         int power = (int)(adc_read - 584)*0.422;
-        printf("sending status P:%d\r\n", power);
+        printf("sending status P:%dH:%dM:%d\r\n", power, hydro_timer, hydro_mode);
             /* Print date and time each 5 seconds */
         uint8_t status = sdk_wifi_station_get_connect_status();
         if (status == STATION_GOT_IP)
@@ -406,7 +403,10 @@ static void ap_count_task(void *pvParameters)
             sendCnt = 0;
             if(send_status)
                 continue;
-            sdk_system_deep_sleep(wakeupTime); 
+            set_device_deepsleep();
+            sdk_system_restart();
+            break;
+            //sdk_system_deep_sleep(wakeupTime); 
         }
 /*        if(!send_status)
         {
@@ -568,7 +568,7 @@ static void topic_received(mqtt_message_data_t *md)
                 hydro_mode = 0; 
                 hydro_timer = 5 * 60;
                 if (!send_status) { 
-                    send_to_pmc_data[0] = 0xc1;
+                    send_to_pmc_data[0] = TURNON;
                     send_to_pmc_data[1] = 10;
                     sendDataCnt = 1;
                     sendCnt = 0;                    
@@ -597,9 +597,9 @@ static void topic_received(mqtt_message_data_t *md)
                 hydro_mode = 1; 
                 hydro_timer = 5 * 60;
                 if (!send_status) { 
-                    send_to_pmc_data[0] = 0xc3;
+                    send_to_pmc_data[0] = CLEANON;
                     send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;                    
+                    sendDataCnt = 1;
                     sendCnt = 0;
                     send_status = 1;
                 }
@@ -607,21 +607,32 @@ static void topic_received(mqtt_message_data_t *md)
                 printf("Cleaning OFF\r\n");  
                 hydro_timer = 0; 
                 if (!send_status) { 
-                    send_to_pmc_data[0] = 0xb4;
+                    send_to_pmc_data[0] = CLEANOFF;
                     send_to_pmc_data[1] = 10;
                     sendDataCnt = 1;                    
                     sendCnt = 0;
                     send_status = 1;
                 }
             }
-        } 
+        } else if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '4' ) //Setting Clean
+        {
+            printf("LED OFF");
+            if (!send_status) { 
+                send_to_pmc_data[0] = TURNOFFLED;
+                send_to_pmc_data[1] = 10;
+                sendDataCnt = 1;                    
+                sendCnt = 0;
+                send_status = 1;
+            }
+        }
     }
     else if ((int)message->payloadlen == 5) {
         if (((char *)(message->payload))[0] == 's' && ((char *)(message->payload))[1] == 'l' &&
             ((char *)(message->payload))[2] == 'e' && ((char *)(message->payload))[3] == 'e' &&
             ((char *)(message->payload))[4] == 'p')
         { 
-            sdk_system_deep_sleep(10*1000*1000);
+            set_device_deepsleep();
+            sdk_system_restart();
         }
     }
     else if ((int)message->payloadlen == 6) {
@@ -652,8 +663,6 @@ static void wifi_task(void *pvParameters)
     uint8_t retries = 30;
     while(1)
     {
-        //const char* ssid_ = "EmilWin"; 
-        //const char* password_ = "Laikwoktai";
         const char* ssid_;
         const char* password_;
         read_wifi_config(0, &ssid_, &password_);
@@ -960,6 +969,9 @@ void user_init(void)
         xTaskCreate(&ap_count_task, "ap_count_task", 1024, NULL, 1, NULL);
         xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
         reset_device_state();
+    } else if (state == 2) {
+        printf("Deepsleep mode!\r\n");
+        sdk_system_deep_sleep(wakeupTime);
     }
 }
 

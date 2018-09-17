@@ -41,6 +41,18 @@ void read_device_id(const char **device_id)
     *device_id = buff_device_id;
 }
 
+void set_device_deepsleep()
+{
+    char buff[TOTAL_BYTE_LENGTH] = "ds_mode";
+    sdk_spi_flash_erase_sector(DEVICE_STATE_SECTOR);
+    int result = sdk_spi_flash_write(DEVICE_STATE_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*) buff, TOTAL_BYTE_LENGTH);
+    if (result == SPI_FLASH_RESULT_OK)
+    {
+        printf("write ok....");
+    }
+    printf("write result: %d \r\n", result);
+}
+
 void set_device_state()
 {
     char buff[TOTAL_BYTE_LENGTH] = "ap_mode";
@@ -75,6 +87,10 @@ int read_device_state(void)
     {
         printf("Please go to ap mode!\r\n");
         state = 1;
+    } else if (buff[0] == 'd' && buff[1] == 's')
+    {
+        printf("Go to deep sleep mode!\r\n");
+        state = 2;
     }
     return state;
 }
