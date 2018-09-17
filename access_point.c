@@ -863,6 +863,13 @@ static void ap_task(void *pvParameters)
             printf("Closing connection\n");
             if (isWifiSet) {
                 //ToDo: This is for testing only
+                if (!send_status) { 
+                    send_to_pmc_data[0] = STANDBY;
+                    send_to_pmc_data[1] = 10;
+                    sendDataCnt = 1;                    
+                    sendCnt = 0;
+                    send_status = 1;
+                }
                 set_device_state();
                 //
                 printf("Wifi is configured by user\n\r");
