@@ -870,8 +870,7 @@ static void ap_task(void *pvParameters)
                     sendCnt = 0;
                     send_status = 1;
                 }
-                set_device_state();
-                //
+                sdk_system_restart();
                 printf("Wifi is configured by user\n\r");
                 break;
             }
@@ -979,6 +978,8 @@ void user_init(void)
         reset_device_state();
     } else if (state == 2) {
         printf("Deepsleep mode!\r\n");
+        sdk_wifi_station_set_auto_connect(false);
+        sdk_wifi_station_stop();
         sdk_system_deep_sleep(wakeupTime);
     }
 }
