@@ -180,6 +180,7 @@ static bool send_status = 0;                //if send data to MCU, set true
 static int ap_count = 0;
 uint16_t sendCnt = 0;
 uint8_t sendDataCnt = 0;
+static uint8_t sysStatus = 0;           //0:standby, 1:hydro, 2:clean, 3:clean complete, 4:charge
 
 const uint32_t wakeupTime = 30*60*1000*1000;
 
@@ -220,15 +221,8 @@ static void hydro_task(void *pvParameters)
         if (hydro_timer != 0) {
             hydro_timer--;
             printf("hydro...%d\r\n", hydro_timer);
-            if (hydro_timer == 0) { // If timer count down to 0 success, then send 0xc2 to pmc
-                if(!send_status)
-                {
-                    send_to_pmc_data[0] = TURNOFF;
-                    send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;                    
-                    sendCnt = 0;
-                    send_status = 1;
-                }
+            if ((hydro_timer == 0) && (sysStatus == 1)) { // If timer count down to 0 success, then send 0xc2 to pmc
+                deep_sleep_timer = 2;
             }
         } 
         if(hydro_timer == 0)
@@ -240,15 +234,23 @@ static void hydro_task(void *pvParameters)
                 modem_sleep_timer = 0;
             }            
         }       
-        if (hydro_timer == 0 && deep_sleep_timer >= 1) {  //If finish hydro go to deep sleep mode
-            if(send_status&&(send_to_pmc_data[0] == TURNOFF))
+        if (hydro_timer == 0 && deep_sleep_timer >= 2) {  //If finish hydro go to deep sleep mode
+            if((!send_status)&&(sysStatus>2))                 //if clean mode,don't turn off
+            {
+                send_to_pmc_data[0] = TURNOFF;
+                send_to_pmc_data[1] = 10;
+                sendDataCnt = 1;                    
+                sendCnt = 0;
+                send_status = 1;
+            }
+            else if(sysStatus >=2)                              //if clean mode or charge,don't turn off
                 continue;
             deep_sleep_timer = 0;
             modem_sleep_timer = 0;
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
             set_device_deepsleep();
             sdk_system_restart();
             break;
-            //sdk_system_deep_sleep(wakeupTime);
         }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
@@ -305,6 +307,7 @@ static void soft_uart_task(void *pvParameters)
             if (c == TURNON) {           // Hydro On
                 hydro_mode = 0; 
                 hydro_timer = 5 * 60;
+                sysStatus = 1;
             } else if (c == TURNOFF) {    // Hydro Off
                 hydro_timer = 0;
                 if(ap_count)
@@ -317,12 +320,14 @@ static void soft_uart_task(void *pvParameters)
                 }
             } else if (c == CLEANOFF) {    // Clean Off
                 hydro_timer = 0; 
+                sysStatus = 3;
             } else if (c == ILEVEL) {    // Receive over current
 
             } else if (c == VLEVEL) {    // Receive over voltage
 
             } else if (c == CHGMODE) {    // Receive charging status
                 hydro_timer = 0;       //
+                sysStatus = 4;
             } else if (c == APMODE) {    // Go To Ap Mode
                 set_device_state();
                 sdk_system_restart();
@@ -347,6 +352,7 @@ static void beat_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
         }                                       //*/
         int power = (int)(adc_read - 584)*0.422;
+        if (power > 100) power = 100;
         printf("sending status P:%d;H:%d;M:%d\r\n", power, hydro_timer, hydro_mode);
         //printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
@@ -558,6 +564,7 @@ static void topic_received(mqtt_message_data_t *md)
                 printf("Hydro ON\r\n");
                 hydro_mode = 0; 
                 hydro_timer = 5 * 60;
+                sysStatus = 1;
                 if (!send_status) { 
                     send_to_pmc_data[0] = TURNON;
                     send_to_pmc_data[1] = 10;
@@ -568,6 +575,7 @@ static void topic_received(mqtt_message_data_t *md)
             } else {
                 printf("Hydro OFF\r\n");  
                 hydro_timer = 0;
+                sysStatus = 2;
                 if (!send_status) { 
                     send_to_pmc_data[0] = STANDBY;
                     send_to_pmc_data[1] = 10;
@@ -597,6 +605,7 @@ static void topic_received(mqtt_message_data_t *md)
             } else {
                 printf("Cleaning OFF\r\n");  
                 hydro_timer = 0; 
+                sysStatus = 3;
                 if (!send_status) { 
                     send_to_pmc_data[0] = CLEANOFF;
                     send_to_pmc_data[1] = 10;
@@ -969,6 +978,7 @@ void user_init(void)
         reset_device_state();
     } else if (state == 2) {
         printf("Deepsleep mode!\r\n");
+        sysStatus = 0;
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_station_stop();
         sdk_system_deep_sleep(wakeupTime);
