@@ -347,13 +347,13 @@ static void beat_task(void *pvParameters)
             gpio_write(HYDRO_PIN_B, 0);
         }                                       //*/
         int power = (int)(adc_read - 584)*0.422;
-        //printf("sending status P:%dH:%dM:%d\r\n", power, hydro_timer, hydro_mode);
-        printf("sending status P:%d\r\n", power);
+        printf("sending status P:%d;H:%d;M:%d\r\n", power, hydro_timer, hydro_mode);
+        //printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
         uint8_t status = sdk_wifi_station_get_connect_status();
         if (status == STATION_GOT_IP)
         {
-            snprintf(msg, PUB_MSG_LEN, "P:%d", power);
+            snprintf(msg, PUB_MSG_LEN, "P:%d:H:%d:M:%d:", power, hydro_timer, hydro_mode);
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
             }
@@ -402,20 +402,10 @@ static void ap_count_task(void *pvParameters)
             sendDataCnt = 1;            
             send_status = 1;
             sendCnt = 0;
-            if(send_status)
-                continue;
             set_device_deepsleep();
             sdk_system_restart();
             break;
-            //sdk_system_deep_sleep(wakeupTime); 
         }
-/*        if(!send_status)
-        {
-            if((ap_count&0x00ff)==0xb2)
-                ap_count=0xd0;
-            send_to_pmc_data[0] = ap_count;
-            sendCnt = 0;
-        }                                           //*/
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
 }
@@ -964,6 +954,7 @@ void user_init(void)
         publish_queue = xQueueCreate(3, PUB_MSG_LEN);
         publish_queue_1 = xQueueCreate(3, PUB_MSG_LEN);
         printf("Normal working mode!\r\n");
+        sdk_wifi_softap_stop();
         xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
         xTaskCreate(&beat_task, "beat_task", 256, NULL, 1, NULL);
         xTaskCreate(&hydro_task, "hydro_task", 256, NULL, 1, NULL);
