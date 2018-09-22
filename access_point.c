@@ -343,7 +343,7 @@ static void beat_task(void *pvParameters)
     char msg[PUB_MSG_LEN];
 
     while (1) {
-        vTaskDelayUntil(&xLastWakeTime, 10000 / portTICK_PERIOD_MS);
+        vTaskDelayUntil(&xLastWakeTime, 5000 / portTICK_PERIOD_MS);
         uint32_t adc_read = sdk_system_adc_read();
         printf("adc_read: %d\r\n", adc_read);
 
@@ -353,13 +353,21 @@ static void beat_task(void *pvParameters)
         }                                       //*/
         int power = (int)(adc_read - 584)*0.422;
         if (power > 100) power = 100;
-        printf("sending status P:%d;H:%d;M:%d\r\n", power, hydro_timer, hydro_mode);
         //printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
         uint8_t status = sdk_wifi_station_get_connect_status();
         if (status == STATION_GOT_IP)
         {
-            snprintf(msg, PUB_MSG_LEN, "P:%d:H:%d:M:%d:", power, hydro_timer, hydro_mode);
+            int mode = 0; 
+            if (hydro_timer == 0 && hydro_mode == 0) {
+                mode = 0;
+            } else if (hydro_timer > 0 && hydro_mode == 0) {
+                mode = 1;
+            } else if (hydro_mode == 1) {
+                mode = 2;
+            }
+            printf("sending status P:%d;H:%d;M:%d\r\n", power, hydro_timer, mode);
+            snprintf(msg, PUB_MSG_LEN, "P:%d:H:%d:M:%d:", power, hydro_timer, mode);
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
             }
@@ -586,10 +594,8 @@ static void topic_received(mqtt_message_data_t *md)
             }
         }
     } else if ((int)message->payloadlen == 3) {
-        printf("Setting Cleaning\r\n");
         if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '3' ) //Setting Clean
         {
-            printf("Setting Cleaning\r\n");
             if (((char *)(message->payload))[2] == '1')
             {
                 printf("Cleaning ON\r\n");
@@ -721,11 +727,11 @@ static void ap_task(void *pvParameters)
         struct sdk_softap_config ap_config = {
             .ssid = AP_SSID,
             .ssid_hidden = 0,
-            .channel = 7,
+            .channel = 3,
             .ssid_len = strlen(AP_SSID),
             .authmode = AUTH_WPA_WPA2_PSK,
             .password = AP_PSK,
-            .max_connection = 1,
+            .max_connection = 3,
             .beacon_interval = 100,
         };
         sdk_wifi_station_set_auto_connect(false);
@@ -964,6 +970,7 @@ void user_init(void)
         publish_queue_1 = xQueueCreate(3, PUB_MSG_LEN);
         printf("Normal working mode!\r\n");
         sdk_wifi_softap_stop();
+        sdk_wifi_station_start();
         xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
         xTaskCreate(&beat_task, "beat_task", 256, NULL, 1, NULL);
         xTaskCreate(&hydro_task, "hydro_task", 256, NULL, 1, NULL);
@@ -972,7 +979,9 @@ void user_init(void)
         xTaskCreate(&ota_task, "get_task", 4096, &ota_info_, 1, NULL);
     } else if (state == 1) {
         printf("Wifi AP mode!\r\n");
-        xTaskCreate(&ap_task, "ap_task", 1024, NULL, 1, NULL);
+        sdk_wifi_station_start();
+        sdk_wifi_softap_start();
+        xTaskCreate(&ap_task, "ap_task", 2048, NULL, 1, NULL);
         xTaskCreate(&ap_count_task, "ap_count_task", 1024, NULL, 1, NULL);
         xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
         reset_device_state();
