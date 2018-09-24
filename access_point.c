@@ -130,7 +130,7 @@ static ota_info ota_info_ = {
 #define MQTT_USER ("wopin")
 #define MQTT_PASS ("wopinH2popo")
 
-#define PUB_MSG_LEN 16
+#define PUB_MSG_LEN 20
 
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
@@ -223,6 +223,13 @@ static void hydro_task(void *pvParameters)
             printf("hydro...%d\r\n", hydro_timer);
             if ((hydro_timer == 0) && (sysStatus == 1)) { // If timer count down to 0 success, then send 0xc2 to pmc
                 deep_sleep_timer = 2;
+            } else if (hydro_timer == 10) { //If timer count down to 10 seconds left, then send "drink" event to server
+                printf("Send drink water event\r\n");
+                char msg[PUB_MSG_LEN];
+                snprintf(msg, PUB_MSG_LEN, "%s", mqtt_client_id);
+                if (xQueueSend(publish_queue_1, (void *)msg, 0) == pdFALSE) {
+                    printf("drink water queue overflow.\r\n");
+                }
             }
         } 
         if(hydro_timer == 0)
@@ -232,7 +239,7 @@ static void hydro_task(void *pvParameters)
             {
                 deep_sleep_timer++;
                 modem_sleep_timer = 0;
-            }            
+            }
         }       
         if (hydro_timer == 0 && deep_sleep_timer >= 2) {  //If finish hydro go to deep sleep mode
             if((!send_status)&&(sysStatus>2))                 //if clean mode,don't turn off
@@ -370,9 +377,6 @@ static void beat_task(void *pvParameters)
             snprintf(msg, PUB_MSG_LEN, "P:%d:H:%d:M:%d:", power, hydro_timer, mode);
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
-            }
-            if (xQueueSend(publish_queue_1, (void *)msg, 0) == pdFALSE) {
-                printf("Publish queue 1 overflow.\r\n");
             }
         }
     }
