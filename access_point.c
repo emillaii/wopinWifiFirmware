@@ -146,7 +146,8 @@ static ota_info ota_info_ = {
 #define TURNOFF  0xb2
 #define CLEANON  0xc3
 #define CLEANOFF 0xb4
-#define TURNOFFLED 0xba
+#define TURNONLED 0xba
+#define TURNOFFLED 0xbc
 #define CHGMODE  0xc5
 #define PWMCOLOR 0xb6
 #define ILEVEL   0xc7
@@ -617,12 +618,17 @@ static void topic_received(mqtt_message_data_t *md)
             }
         } else if (((char *)(message->payload))[0] == '0' && ((char *)(message->payload))[1] == '4' ) //Setting Clean
         {
-            printf("LED OFF");
-            if (!send_status) { 
-                send_to_pmc_data[0] = TURNOFFLED;
+            if (((char *)(message->payload))[2] == '0')
+            {
+                printf("LED OFF");
+                if (!send_status) { 
+                    send_to_pmc_data[0] = TURNOFFLED;
+                    send_to_pmc_data[1] = 10;
+                    send_status = 1;
+                }
+            } else {
+                send_to_pmc_data[0] = TURNONLED;
                 send_to_pmc_data[1] = 10;
-//                sendDataCnt = 1;                    
-//                sendCnt = 0;
                 send_status = 1;
             }
         }
