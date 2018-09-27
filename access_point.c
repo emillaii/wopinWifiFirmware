@@ -564,15 +564,19 @@ static void topic_received(mqtt_message_data_t *md)
             printf("Setting Hydro\r\n");
             if (((char *)(message->payload))[2] == '1')
             {
-                printf("Hydro ON\r\n");
+                char val[4] = "000\0";
+                val[0] = ((char *)(message->payload))[5]; 
+                val[1] = ((char *)(message->payload))[6]; 
+                val[2] = ((char *)(message->payload))[7]; 
+                uint16_t intVal = 5*60;
+                sscanf(val, "%x", &intVal);
+                printf("Hydro ON input time: %d\r\n", intVal);
                 hydro_mode = 0; 
-                hydro_timer = 5 * 60;
+                hydro_timer = intVal;
                 sysStatus = 1;
                 if (!send_status) { 
                     send_to_pmc_data[0] = TURNON;
-                    send_to_pmc_data[1] = 10;
-//                    sendDataCnt = 1;
-//                    sendCnt = 0;                    
+                    send_to_pmc_data[1] = 10;                
                     send_status = 1;
                 }
             } else {
