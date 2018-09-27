@@ -178,8 +178,8 @@ char send_to_pmc_data[20]={'\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n
 char read_from_pmc_data[20]={'\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n','\n'};
 static bool send_status = 0;                //if send data to MCU, set true
 static int ap_count = 0;
-uint16_t sendCnt = 0;
-uint8_t sendDataCnt = 0;
+//uint16_t sendCnt = 0;
+//uint8_t sendDataCnt = 0;
 static uint8_t sysStatus = 0;           //0:standby, 1:hydro, 2:clean, 3:clean complete, 4:charge
 
 const uint32_t wakeupTime = 30*60*1000*1000;
@@ -242,12 +242,12 @@ static void hydro_task(void *pvParameters)
             }
         }       
         if (hydro_timer == 0 && deep_sleep_timer >= 2) {  //If finish hydro go to deep sleep mode
-            if((!send_status)&&(sysStatus>2))                 //if clean mode,don't turn off
+            if((!send_status)&&(sysStatus<2))                 //if clean mode,don't turn off
             {
                 send_to_pmc_data[0] = TURNOFF;
                 send_to_pmc_data[1] = 10;
-                sendDataCnt = 1;                    
-                sendCnt = 0;
+//               sendDataCnt = 1;                    
+//                sendCnt = 0;
                 send_status = 1;
             }
             else if(sysStatus >=2)                              //if clean mode or charge,don't turn off
@@ -270,77 +270,67 @@ static void soft_uart_task(void *pvParameters)
     softuart_open(0, 9600, RX_PIN, TX_PIN);
     while (true)
     {
-        if(send_status&&(sendCnt<100))
+        if(send_status)
         {
             softuart_put(0,send_to_pmc_data[0]);
-            printf("send %x \r\n",send_to_pmc_data[0]);
-            sendCnt++;
+            sdk_os_delay_us(500);
+            softuart_put(0,send_to_pmc_data[0]);
+            if(send_to_pmc_data[0]==0xb6)
+            {
+                softuart_put(0,send_to_pmc_data[1]);
+                sdk_os_delay_us(500);
+                softuart_put(0,send_to_pmc_data[2]);
+                sdk_os_delay_us(500);
+                softuart_put(0,send_to_pmc_data[3]);
+            }
+            send_status = 0;
+            printf("send :%c, 0x%02x\n",send_to_pmc_data[0],send_to_pmc_data[0]);
         }
-        else if(sendCnt>=100)
-        {
-            printf("%x send failed\r\n",send_to_pmc_data[0]);
-            send_status = 0;            
-            sendCnt = 0;
-        }       //*/
 
-        sdk_os_delay_us(2000);
+        sdk_os_delay_us(500);
 
         if (!softuart_available(0))
             continue;
 
         char c = softuart_read(0);
         printf("input :%c, 0x%02x\n",c,c);        
-        if(send_status&&sendCnt<100)
-        {
-            if(c == send_to_pmc_data[0])
+        if (c == TURNON) {           // Hydro On
+            if(sysStatus != 1)
             {
-                if(sendDataCnt)
-                {
-                    for(tempSUart = 0; tempSUart<sendDataCnt; tempSUart++)
-                    {
-                        send_to_pmc_data[tempSUart] = send_to_pmc_data[tempSUart+1];                       
-                    }
-                    send_status = 1;
-                    sendDataCnt--;
-                }
-                else
-                    send_status = 0;
-                sendCnt = 0;                 
-            }
-        }
-        else
-        {
-            softuart_put(0,c);
-            if (c == TURNON) {           // Hydro On
                 hydro_mode = 0; 
                 hydro_timer = 5 * 60;
                 sysStatus = 1;
-            } else if (c == TURNOFF) {    // Hydro Off
+            }
+        } else if (c == TURNOFF) {    // Hydro Off
+            if(sysStatus==1)
+            {
                 hydro_timer = 0;
-                if(ap_count)
-                {
-                    ap_count=0;
-                    set_device_deepsleep();
-                    sdk_system_restart();
-                    break;
-                    //sdk_system_deep_sleep(wakeupTime);
-                }
-            } else if (c == CLEANOFF) {    // Clean Off
-                hydro_timer = 0; 
-                sysStatus = 3;
-            } else if (c == ILEVEL) {    // Receive over current
-
-            } else if (c == VLEVEL) {    // Receive over voltage
-
-            } else if (c == CHGMODE) {    // Receive charging status
-                hydro_timer = 0;       //
-                sysStatus = 4;
-            } else if (c == APMODE) {    // Go To Ap Mode
-                set_device_state();
+                deep_sleep_timer = 2;
+            }            
+            if(ap_count)
+            {
+                ap_count=0;
+                set_device_deepsleep();
                 sdk_system_restart();
                 break;
-            }            
-        }
+                //sdk_system_deep_sleep(wakeupTime);
+            }
+        } else if (c == CLEANOFF) {    // Clean Off
+            hydro_timer = 0; 
+            sysStatus = 3;
+        } else if (c == ILEVEL) {    // Receive over current
+
+        } else if (c == VLEVEL) {    // Receive over voltage
+
+        } else if (c == CHGMODE) {    // Receive charging status
+            hydro_timer = 0;       //
+            sysStatus = 4;
+        } else if (c == APMODE) {    // Go To Ap Mode
+            set_device_state();
+            sdk_system_restart();
+            break;
+        }            
+
     }
 } 
 
@@ -358,7 +348,7 @@ static void beat_task(void *pvParameters)
             gpio_write(HYDRO_PIN_A, 0);
             gpio_write(HYDRO_PIN_B, 0);
         }                                       //*/
-        int power = (int)(adc_read - 584)*0.422;
+        int power = (int)(adc_read - 600)*0.476;        //3.1v = 0%, 4.16v=100%
         if (power > 100) power = 100;
         //printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
@@ -417,9 +407,9 @@ static void ap_count_task(void *pvParameters)
             printf("AP Mode Timeout\r\n");
             send_to_pmc_data[0] = TURNOFF;
             send_to_pmc_data[1] = 10;
-            sendDataCnt = 1;            
+//            sendDataCnt = 1;            
             send_status = 1;
-            sendCnt = 0;
+//            sendCnt = 0;
             set_device_deepsleep();
             sdk_system_restart();
             break;
@@ -561,8 +551,8 @@ static void topic_received(mqtt_message_data_t *md)
                 send_to_pmc_data[2] = g_val;
                 send_to_pmc_data[3] = b_val;
                 send_to_pmc_data[4] = 10;                           //end byte
-                sendDataCnt = 4;
-                sendCnt = 0;
+//                sendDataCnt = 4;
+//                sendCnt = 0;
                 send_status = 1;
             }
             //set_led(r_val, g_val, b_val);
@@ -580,19 +570,19 @@ static void topic_received(mqtt_message_data_t *md)
                 if (!send_status) { 
                     send_to_pmc_data[0] = TURNON;
                     send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;
-                    sendCnt = 0;                    
+//                    sendDataCnt = 1;
+//                    sendCnt = 0;                    
                     send_status = 1;
                 }
             } else {
                 printf("Hydro OFF\r\n");  
                 hydro_timer = 0;
-                sysStatus = 2;
+                sysStatus = 0;
                 if (!send_status) { 
                     send_to_pmc_data[0] = STANDBY;
                     send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;                    
-                    sendCnt = 0;
+//                    sendDataCnt = 1;                    
+//                    sendCnt = 0;
                     send_status = 1;
                 }
             }
@@ -605,11 +595,12 @@ static void topic_received(mqtt_message_data_t *md)
                 printf("Cleaning ON\r\n");
                 hydro_mode = 1; 
                 hydro_timer = 5 * 60;
+                sysStatus = 2;
                 if (!send_status) { 
                     send_to_pmc_data[0] = CLEANON;
                     send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;
-                    sendCnt = 0;
+//                    sendDataCnt = 1;
+//                    sendCnt = 0;
                     send_status = 1;
                 }
             } else {
@@ -619,8 +610,8 @@ static void topic_received(mqtt_message_data_t *md)
                 if (!send_status) { 
                     send_to_pmc_data[0] = CLEANOFF;
                     send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;                    
-                    sendCnt = 0;
+//                    sendDataCnt = 1;                    
+//                    sendCnt = 0;
                     send_status = 1;
                 }
             }
@@ -630,8 +621,8 @@ static void topic_received(mqtt_message_data_t *md)
             if (!send_status) { 
                 send_to_pmc_data[0] = TURNOFFLED;
                 send_to_pmc_data[1] = 10;
-                sendDataCnt = 1;                    
-                sendCnt = 0;
+//                sendDataCnt = 1;                    
+//                sendCnt = 0;
                 send_status = 1;
             }
         }
@@ -875,8 +866,8 @@ static void ap_task(void *pvParameters)
                 if (!send_status) { 
                     send_to_pmc_data[0] = STANDBY;
                     send_to_pmc_data[1] = 10;
-                    sendDataCnt = 1;                    
-                    sendCnt = 0;
+//                    sendDataCnt = 1;                    
+//                    sendCnt = 0;
                     send_status = 1;
                 }
                 sdk_system_restart();
