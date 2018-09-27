@@ -620,13 +620,14 @@ static void topic_received(mqtt_message_data_t *md)
         {
             if (((char *)(message->payload))[2] == '0')
             {
-                printf("LED OFF");
+                printf("LED OFF\r\n");
                 if (!send_status) { 
                     send_to_pmc_data[0] = TURNOFFLED;
                     send_to_pmc_data[1] = 10;
                     send_status = 1;
                 }
             } else {
+                printf("LED ON\r\n");
                 send_to_pmc_data[0] = TURNONLED;
                 send_to_pmc_data[1] = 10;
                 send_status = 1;
