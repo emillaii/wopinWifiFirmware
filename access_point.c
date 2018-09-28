@@ -734,7 +734,7 @@ static void ap_task(void *pvParameters)
         struct sdk_softap_config ap_config = {
             .ssid = AP_SSID,
             .ssid_hidden = 0,
-            .channel = 3,
+            .channel = 6,
             .ssid_len = strlen(AP_SSID),
             .authmode = AUTH_WPA_WPA2_PSK,
             .password = AP_PSK,
