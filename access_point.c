@@ -256,9 +256,9 @@ static void hydro_task(void *pvParameters)
             deep_sleep_timer = 0;
             modem_sleep_timer = 0;
             vTaskDelay(1000 / portTICK_PERIOD_MS);
-            set_device_deepsleep();
-            sdk_system_restart();
-            break;
+            //set_device_deepsleep();
+            //sdk_system_restart();
+            //break;
         }
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
@@ -311,9 +311,9 @@ static void soft_uart_task(void *pvParameters)
             if(ap_count)
             {
                 ap_count=0;
-                set_device_deepsleep();
-                sdk_system_restart();
-                break;
+                //set_device_deepsleep();
+                //sdk_system_restart();
+                //break;
                 //sdk_system_deep_sleep(wakeupTime);
             }
         } else if (c == CLEANOFF) {    // Clean Off
@@ -345,10 +345,11 @@ static void beat_task(void *pvParameters)
         uint32_t adc_read = sdk_system_adc_read();
         printf("adc_read: %d\r\n", adc_read);
 
-/*        if (adc_read <= 537) {
-            gpio_write(HYDRO_PIN_A, 0);
-            gpio_write(HYDRO_PIN_B, 0);
-        }                                       //*/
+        if (!send_status && (sysStatus==1)) { 
+            send_to_pmc_data[0] = TURNON;
+            send_to_pmc_data[1] = 10;           
+            send_status = 1;
+        }
         int power = (int)(adc_read - 600)*0.476;        //3.1v = 0%, 4.16v=100%
         if (power > 100) power = 100;
         //printf("sending status P:%d\r\n", power);
@@ -411,9 +412,9 @@ static void ap_count_task(void *pvParameters)
 //            sendDataCnt = 1;            
             send_status = 1;
 //            sendCnt = 0;
-            set_device_deepsleep();
-            sdk_system_restart();
-            break;
+            //set_device_deepsleep();
+            //sdk_system_restart();
+            //break;
         }
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
