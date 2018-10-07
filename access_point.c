@@ -226,7 +226,7 @@ static void hydro_task(void *pvParameters)
                 deep_sleep_timer = 2;
             } else if (hydro_timer == 10) { //If timer count down to 10 seconds left, then send "drink" event to server
                 printf("Send drink water event\r\n");
-                char msg[PUB_MSG_LEN];
+                char msg[PUB_MSG_LEN] = {0};
                 snprintf(msg, PUB_MSG_LEN, "%s", mqtt_client_id);
                 if (xQueueSend(publish_queue_1, (void *)msg, 0) == pdFALSE) {
                     printf("drink water queue overflow.\r\n");
@@ -338,7 +338,7 @@ static void soft_uart_task(void *pvParameters)
 static void beat_task(void *pvParameters)
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    char msg[PUB_MSG_LEN];
+    char msg[PUB_MSG_LEN] = {0};
 
     while (1) {
         vTaskDelayUntil(&xLastWakeTime, 5000 / portTICK_PERIOD_MS);
@@ -365,7 +365,7 @@ static void beat_task(void *pvParameters)
                 mode = 2;
             }
             printf("sending status P:%d;H:%d;M:%d\r\n", power, hydro_timer, mode);
-            snprintf(msg, PUB_MSG_LEN, "P:%d:H:%d:M:%d:", power, hydro_timer, mode);
+            snprintf(msg, sizeof(msg), "P:%d:H:%d:M:%d:", power, hydro_timer, mode);
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
             }
@@ -719,10 +719,12 @@ static void ap_task(void *pvParameters)
 {
     struct ip_info ap_ip;
     bool isWifiSet = false;
+    vTaskDelay( 5000 / portTICK_PERIOD_MS );
     //while(1) {
         //xSemaphoreGive( wifi_alive );
+        sdk_wifi_station_start();
+        sdk_wifi_softap_start();
         printf("Setting AP mode....\r\n");
-
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_set_opmode(STATIONAP_MODE);
         IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
@@ -733,7 +735,7 @@ static void ap_task(void *pvParameters)
         struct sdk_softap_config ap_config = {
             .ssid = AP_SSID,
             .ssid_hidden = 0,
-            .channel = 3,
+            .channel = 6,
             .ssid_len = strlen(AP_SSID),
             .authmode = AUTH_WPA_WPA2_PSK,
             .password = AP_PSK,
@@ -985,8 +987,8 @@ void user_init(void)
         xTaskCreate(&ota_task, "get_task", 4096, &ota_info_, 1, NULL);
     } else if (state == 1) {
         printf("Wifi AP mode!\r\n");
-        sdk_wifi_station_start();
-        sdk_wifi_softap_start();
+        sdk_wifi_softap_stop();
+        sdk_wifi_station_stop();
         xTaskCreate(&ap_task, "ap_task", 2048, NULL, 1, NULL);
         xTaskCreate(&ap_count_task, "ap_count_task", 1024, NULL, 1, NULL);
         xTaskCreate(&soft_uart_task, "softuart_task", 256, NULL, 1, NULL);
