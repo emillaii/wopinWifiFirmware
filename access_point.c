@@ -716,6 +716,7 @@ static void wifi_task(void *pvParameters)
     } 
 }
 
+
 static void ap_task(void *pvParameters)
 {
     struct ip_info ap_ip;
@@ -723,9 +724,9 @@ static void ap_task(void *pvParameters)
     vTaskDelay( 5000 / portTICK_PERIOD_MS );
     //while(1) {
         //xSemaphoreGive( wifi_alive );
+
         sdk_wifi_station_start();
         sdk_wifi_softap_start();
-        printf("Setting AP mode....\r\n");
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_set_opmode(STATIONAP_MODE);
         IP4_ADDR(&ap_ip.ip, 172, 16, 0, 1);
@@ -734,15 +735,17 @@ static void ap_task(void *pvParameters)
         sdk_wifi_set_ip_info(1, &ap_ip);
 
         struct sdk_softap_config ap_config = {
-            .ssid = AP_SSID,
             .ssid_hidden = 0,
             .channel = 6,
-            .ssid_len = strlen(AP_SSID),
+            .ssid_len = strlen(mqtt_client_id),
             .authmode = AUTH_WPA_WPA2_PSK,
             .password = AP_PSK,
             .max_connection = 3,
             .beacon_interval = 100,
         };
+
+        strncpy((char *)ap_config.ssid, mqtt_client_id, 32);
+
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_softap_set_config(&ap_config);
 
