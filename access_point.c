@@ -137,8 +137,8 @@ static ota_info ota_info_ = {
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
 
-#define TEST_SSID "EmilWin"
-#define TEST_SSID_PW "Laikwoktai"
+#define TEST_SSID "WopinWifiTest"
+#define TEST_SSID_PW "12345678"
 
 //#define SCL_PIN (14)            //D5
 //#define SDA_PIN (2)             //D4
@@ -680,11 +680,12 @@ static void wifi_task(void *pvParameters)
 {
     uint8_t status  = 0;
     uint8_t retries = 30;
+    uint8_t test_count = 0;
     while(1)
     {
         const char* ssid_;
         const char* password_;
-        if (retries == 5) {
+        if (test_count == 1) {  //Use for test
             ssid_ = TEST_SSID;
             password_ = TEST_SSID_PW;
         } else {
@@ -726,6 +727,7 @@ static void wifi_task(void *pvParameters)
         sdk_wifi_station_disconnect();
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
         retries = 30;
+        test_count++;
     } 
 }
 
