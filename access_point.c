@@ -27,9 +27,11 @@
 
 char binary_filename[30];
 char sha256_filename[30];
+bool is_wifi_connected = false;
 
 #define OTA_SERVER "wifi.h2popo.com"
 #define OTA_PORT "8084"
+int version = 1;
 
 static inline void ota_error_handling(OTA_err err) {
     printf("ota_error_handling:");
@@ -130,10 +132,13 @@ static ota_info ota_info_ = {
 #define MQTT_USER ("wopin")
 #define MQTT_PASS ("wopinH2popo")
 
-#define PUB_MSG_LEN 20
+#define PUB_MSG_LEN 22
 
 #define AP_SSID "H2PoPo"
 #define AP_PSK "12345678"
+
+#define TEST_SSID "EmilWin"
+#define TEST_SSID_PW "Laikwoktai"
 
 //#define SCL_PIN (14)            //D5
 //#define SDA_PIN (2)             //D4
@@ -225,11 +230,18 @@ static void hydro_task(void *pvParameters)
             if ((hydro_timer == 0) && (sysStatus == 1)) { // If timer count down to 0 success, then send 0xc2 to pmc
                 deep_sleep_timer = 2;
             } else if (hydro_timer == 10) { //If timer count down to 10 seconds left, then send "drink" event to server
-                printf("Send drink water event\r\n");
-                char msg[PUB_MSG_LEN] = {0};
-                snprintf(msg, PUB_MSG_LEN, "%s", mqtt_client_id);
-                if (xQueueSend(publish_queue_1, (void *)msg, 0) == pdFALSE) {
-                    printf("drink water queue overflow.\r\n");
+                if (is_wifi_connected) // If wifi is connected, send drink event with previous count as well
+                {
+                    int accumlated_hydro_count = read_hydro_count();
+                    printf("Send drink water event. Accumlated hydro count: %d\r\n", accumlated_hydro_count);
+                    char msg[PUB_MSG_LEN] = {0};
+                    snprintf(msg, PUB_MSG_LEN, "%s_%d", mqtt_client_id, accumlated_hydro_count);
+                    if (xQueueSend(publish_queue_1, (void *)msg, 0) == pdFALSE) {
+                        printf("drink water queue overflow.\r\n");
+                    }
+                    reset_hydro_count();
+                } else { //increment the save water count
+                    increment_hydro_count();
                 }
             }
         } 
@@ -247,8 +259,6 @@ static void hydro_task(void *pvParameters)
             {
                 send_to_pmc_data[0] = TURNOFF;
                 send_to_pmc_data[1] = 10;
-//               sendDataCnt = 1;                    
-//                sendCnt = 0;
                 send_status = 1;
             }
             else if(sysStatus >=2)                              //if clean mode or charge,don't turn off
@@ -352,6 +362,7 @@ static void beat_task(void *pvParameters)
         }
         int power = (int)(adc_read - 600)*0.476;        //3.1v = 0%, 4.16v=100%
         if (power > 100) power = 100;
+        if (power < 0) power = 1;
         //printf("sending status P:%d\r\n", power);
             /* Print date and time each 5 seconds */
         uint8_t status = sdk_wifi_station_get_connect_status();
@@ -365,8 +376,8 @@ static void beat_task(void *pvParameters)
             } else if (hydro_mode == 1) {
                 mode = 2;
             }
-            printf("sending status P:%d;H:%d;M:%d\r\n", power, hydro_timer, mode);
-            snprintf(msg, sizeof(msg), "P:%d:H:%d:M:%d:", power, hydro_timer, mode);
+            printf("sending status P:%d:H:%d:M:%d:V:%d\r\n", power, hydro_timer, mode, version);
+            snprintf(msg, sizeof(msg), "P:%d:H:%d:M:%d:V:%d", power, hydro_timer, mode, version);
             if (xQueueSend(publish_queue, (void *)msg, 0) == pdFALSE) {
                 printf("Publish queue overflow.\r\n");
             }
@@ -405,16 +416,11 @@ static void ap_count_task(void *pvParameters)
     while(1)
     {
         ap_count++;
-        if (ap_count >= 3 * 60) {
+        if (ap_count >= 4 * 60) {
             printf("AP Mode Timeout\r\n");
             send_to_pmc_data[0] = TURNOFF;
-            send_to_pmc_data[1] = 10;
-//            sendDataCnt = 1;            
+            send_to_pmc_data[1] = 10;          
             send_status = 1;
-//            sendCnt = 0;
-            //set_device_deepsleep();
-            //sdk_system_restart();
-            //break;
         }
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
     }
@@ -678,7 +684,12 @@ static void wifi_task(void *pvParameters)
     {
         const char* ssid_;
         const char* password_;
-        read_wifi_config(0, &ssid_, &password_);
+        if (retries == 5) {
+            ssid_ = TEST_SSID;
+            password_ = TEST_SSID_PW;
+        } else {
+            read_wifi_config(0, &ssid_, &password_);
+        }
         struct sdk_station_config config; 
         memcpy(&config.ssid, ssid_, strlen((const char *)ssid_) + 1);
         memcpy(&config.password, password_, strlen((const char *)password_) + 1);
@@ -706,9 +717,11 @@ static void wifi_task(void *pvParameters)
         }
 
         while ((status = sdk_wifi_station_get_connect_status()) == STATION_GOT_IP) {
+            is_wifi_connected = true;
             xSemaphoreGive( wifi_alive );
             vTaskDelay( 2000 / portTICK_PERIOD_MS );
         }
+        is_wifi_connected = false;
         printf("WiFi: disconnected\n\r");
         sdk_wifi_station_disconnect();
         vTaskDelay( 1000 / portTICK_PERIOD_MS );
@@ -887,6 +900,7 @@ static void ap_task(void *pvParameters)
 //                    sendCnt = 0;
                     send_status = 1;
                 }
+                reset_hydro_count();
                 sdk_system_restart();
                 printf("Wifi is configured by user\n\r");
                 break;

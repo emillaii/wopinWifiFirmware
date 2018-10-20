@@ -1,9 +1,11 @@
 #include "smartConfig.h"
 #include <string.h>
 
-#define SMART_CONFIG_SECTOR 	1020
-#define DEVICE_ID_SECTOR        1019
-#define DEVICE_STATE_SECTOR     1018
+#define SMART_CONFIG_SECTOR 	 1020
+#define DEVICE_ID_SECTOR         1019
+#define DEVICE_STATE_SECTOR      1018
+#define HYDRO_WATER_COUNT_SECTOR 1017
+
 //1 byte for ssid length, 64 bytes for ssid
 //1 byte for password length, 64 bytes for password
 #define TOTAL_BYTE_LENGTH 		130
@@ -17,6 +19,7 @@
 char buff_device_id[TOTAL_BYTE_LENGTH] = { 0 };
 char buff_ssid[TOTAL_BYTE_LENGTH] = { 0 };
 char buff_pw[TOTAL_BYTE_LENGTH] = { 0 };
+char buff_hydro_count[TOTAL_BYTE_LENGTH] = { 0 };
 
 void memory_read(void)
 {
@@ -25,14 +28,6 @@ void memory_read(void)
     printf("%s \r\n", buff); 
     sdk_spi_flash_read(SMART_CONFIG_SECTOR*SPI_FLASH_SEC_SIZE + MAX_BYTE_LENGTH, (uint32_t*)&buff, TOTAL_BYTE_LENGTH);
     printf("%s \r\n", buff); 
-    
-    /*for (uint32_t j = 0; j < 1024; j++)
-    {
-        uint8_t values[4] = { 0 };
-        sdk_spi_flash_read(addr + j*4096, &values, sizeof(values));
-        printf("memory addr: 0x%X value: %x %x %x %x\n", addr + j*4096, values[0], values[1], values[2], values[3]);
-    }*/
-    //printf("memory addr: 0x%X value: %x %x %x %x\n", addr, values[0], values[1], values[2], values[3]);
 }
 
 void read_device_id(const char **device_id)
@@ -118,6 +113,64 @@ void save_wifi_config(const char *ssid, const char *password, int id)
     strcpy(buff + MAX_BYTE_LENGTH, password);
     sdk_spi_flash_erase_sector(SMART_CONFIG_SECTOR);
     int result = sdk_spi_flash_write(SMART_CONFIG_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*) buff, TOTAL_BYTE_LENGTH);
+    if (result == SPI_FLASH_RESULT_OK)
+    {
+        printf("write ok....");
+    }
+    printf("write result: %d \r\n", result);
+}
+
+int read_hydro_count()
+{
+    int count = 0;
+    char buff[TOTAL_BYTE_LENGTH];
+    sdk_spi_flash_read(HYDRO_WATER_COUNT_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*)&buff, TOTAL_BYTE_LENGTH);
+    printf("Read buff: %s\r\n", buff);
+    if (buff[0] == '-') {
+        printf("Invalid count\r\n");
+        reset_hydro_count();
+        return 0;
+    }
+    char str[2] = "00";
+    str[0] = buff[0];
+    str[1] = buff[1];
+    count = atoi(str);
+    printf("hydro count : %d \r\n", count);
+
+    if (count < 0 && count > 40) {
+        printf("Invalid count\r\n");
+        reset_hydro_count();
+        return 0;
+    }
+
+    return count;
+}
+
+void reset_hydro_count() 
+{
+    printf("Reset hydro count");
+    char buff[TOTAL_BYTE_LENGTH] = "00";
+    sdk_spi_flash_erase_sector(HYDRO_WATER_COUNT_SECTOR);
+    int result = sdk_spi_flash_write(HYDRO_WATER_COUNT_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*) buff, TOTAL_BYTE_LENGTH);
+    if (result == SPI_FLASH_RESULT_OK)
+    {
+        printf("Reset ok....\r\n");
+    }
+}
+
+void increment_hydro_count()
+{
+    printf("increment hydro count\r\n");
+    int count = read_hydro_count();
+    if (count < 40) count++;
+    char str[2];
+    sprintf(str, "%d", count);
+    printf("current hydro count %s\r\n", str);
+    char buff[TOTAL_BYTE_LENGTH] = "";
+    buff[0] = str[0];
+    buff[1] = str[1];
+    sdk_spi_flash_erase_sector(HYDRO_WATER_COUNT_SECTOR);
+    int result = sdk_spi_flash_write(HYDRO_WATER_COUNT_SECTOR*SPI_FLASH_SEC_SIZE, (uint32_t*) buff , TOTAL_BYTE_LENGTH);
     if (result == SPI_FLASH_RESULT_OK)
     {
         printf("write ok....");
