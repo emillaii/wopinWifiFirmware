@@ -679,12 +679,12 @@ static void topic_received(mqtt_message_data_t *md)
 static void wifi_task(void *pvParameters)
 {
     uint8_t status  = 0;
-    uint8_t retries = 30;
+    uint8_t retries = 5;
     uint8_t test_count = 0;
     while(1)
     {
-        const char* ssid_;
-        const char* password_;
+        const char* ssid_ = "";
+        const char* password_ = "";
         if (test_count == 1) {  //Use for test
             ssid_ = TEST_SSID;
             password_ = TEST_SSID_PW;
