@@ -29,6 +29,11 @@ char binary_filename[30];
 char sha256_filename[30];
 bool is_wifi_connected = false;
 
+int modem_sleep_timer = 0;
+int deep_sleep_timer = 0;
+int hydro_timer = 0;
+int hydro_mode = 0; // 0: normal mode 1: clean mode
+
 #define OTA_SERVER "wifi.h2popo.com"
 #define OTA_PORT "8084"
 int version = 1;
@@ -88,7 +93,7 @@ static void ota_task(void *PvParameter)
         {
             OTA_err err;
             // Remake this task until ota work
-
+            hydro_timer = 300; //Need to reset the hydro time for downloading artifact.
             ota_info info = {
                 .server      = OTA_SERVER,
                 .port        = OTA_PORT,
@@ -96,12 +101,12 @@ static void ota_task(void *PvParameter)
                 .sha256_path = sha256_filename,
             };
 
+            printf("Updating firmware.....\r\n");
             err = ota_update(&info);
             ota_error_handling(err);
 
             if(err != OTA_UPDATE_DONE) {
                 vTaskDelay(1000 / portTICK_PERIOD_MS);
-                printf(".....\n\n\n");
                 continue;
             }
             vTaskDelay(1000 / portTICK_PERIOD_MS);
@@ -134,8 +139,8 @@ static ota_info ota_info_ = {
 
 #define PUB_MSG_LEN 22
 
-#define AP_SSID "H2PoPo"
-#define AP_PSK "12345678"
+#define AP_SSID "Wopin-H2PoPo"
+#define AP_PSK "Dt-20181025"
 
 #define TEST_SSID "WopinWifiTest"
 #define TEST_SSID_PW "12345678"
@@ -217,10 +222,6 @@ typedef struct {
 //Static scan status storage.
 static ScanResultData cgiWifiAps;
 
-int modem_sleep_timer = 0;
-int deep_sleep_timer = 0;
-int hydro_timer = 0;
-int hydro_mode = 0; // 0: normal mode 1: clean mode
 static void hydro_task(void *pvParameters)
 {
     while(1) {
@@ -665,7 +666,7 @@ static void topic_received(mqtt_message_data_t *md)
             v[2] = ((char *)(message->payload))[5];
             memset(binary_filename, 0, sizeof(binary_filename));
             memset(sha256_filename, 0, sizeof(sha256_filename));
-            strcpy(binary_filename, "wopin_");
+            strcpy(binary_filename, "/wopin_");
             strcat(binary_filename, v);
             strcat(sha256_filename, binary_filename);
             strcat(binary_filename, ".bin");
@@ -752,14 +753,15 @@ static void ap_task(void *pvParameters)
         struct sdk_softap_config ap_config = {
             .ssid_hidden = 0,
             .channel = 6,
-            .ssid_len = strlen(mqtt_client_id),
+            .ssid_len = strlen(AP_SSID),
             .authmode = AUTH_WPA_WPA2_PSK,
+            .ssid = AP_SSID,
             .password = AP_PSK,
             .max_connection = 3,
             .beacon_interval = 100,
         };
 
-        strncpy((char *)ap_config.ssid, mqtt_client_id, 32);
+        //strncpy((char *)ap_config.ssid, mqtt_client_id, 32);
 
         sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_softap_set_config(&ap_config);
