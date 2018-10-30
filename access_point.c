@@ -904,6 +904,7 @@ static void ap_task(void *pvParameters)
 //                    sendCnt = 0;
                     send_status = 1;
                 }
+                vTaskDelay( 50 / portTICK_PERIOD_MS );
                 reset_hydro_count();
                 sdk_system_restart();
                 printf("Wifi is configured by user\n\r");
