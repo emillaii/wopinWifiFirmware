@@ -34,7 +34,7 @@ int deep_sleep_timer = 0;
 int hydro_timer = 0;
 int hydro_mode = 0; // 0: normal mode 1: clean mode
 
-#define OTA_SERVER "wifi2.h2popo.com"
+#define OTA_SERVER "wifi.h2popo.com"
 #define OTA_PORT "8084"
 int version = 1;
 
@@ -131,7 +131,7 @@ static ota_info ota_info_ = {
 };
 // End of ota task
 
-#define MQTT_HOST ("wifi2.h2popo.com")
+#define MQTT_HOST ("wifi.h2popo.com")
 #define MQTT_PORT 8083
 
 #define MQTT_USER ("wopin")
