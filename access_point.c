@@ -34,7 +34,7 @@ int deep_sleep_timer = 0;
 int hydro_timer = 0;
 int hydro_mode = 0; // 0: normal mode 1: clean mode
 
-#define OTA_SERVER "wifi.h2popo.com"
+#define OTA_SERVER "wifi2.h2popo.com"
 #define OTA_PORT "8084"
 int version = 1;
 
@@ -131,7 +131,7 @@ static ota_info ota_info_ = {
 };
 // End of ota task
 
-#define MQTT_HOST ("wifi.h2popo.com")
+#define MQTT_HOST ("wifi2.h2popo.com")
 #define MQTT_PORT 8083
 
 #define MQTT_USER ("wopin")
@@ -154,7 +154,7 @@ static ota_info ota_info_ = {
 
 #define TURNON   0xc1
 #define TURNOFF  0xb2
-#define CLEANON  0xc3
+#define CLEANON  0xce
 #define CLEANOFF 0xb4
 #define TURNONLED 0xba
 #define TURNOFFLED 0xbc
@@ -740,6 +740,19 @@ static void ap_task(void *pvParameters)
     vTaskDelay( 5000 / portTICK_PERIOD_MS );
     //while(1) {
         //xSemaphoreGive( wifi_alive );
+	struct sdk_softap_config ap_config = {
+            .ssid_hidden = 0,
+            .channel = 6,
+            .ssid_len = strlen(AP_SSID),
+            .authmode = AUTH_WPA_WPA2_PSK,
+            .ssid = AP_SSID,
+            .password = AP_PSK,
+            .max_connection = 30,
+            .beacon_interval = 100,
+        };
+
+        sdk_wifi_station_set_auto_connect(false);
+        sdk_wifi_softap_set_config(&ap_config);
 
         sdk_wifi_station_start();
         sdk_wifi_softap_start();
@@ -749,21 +762,6 @@ static void ap_task(void *pvParameters)
         IP4_ADDR(&ap_ip.gw, 0, 0, 0, 0);
         IP4_ADDR(&ap_ip.netmask, 255, 255, 0, 0);
         sdk_wifi_set_ip_info(1, &ap_ip);
-
-        struct sdk_softap_config ap_config = {
-            .ssid_hidden = 0,
-            .channel = 6,
-            .ssid_len = strlen(AP_SSID),
-            .authmode = AUTH_WPA_WPA2_PSK,
-            .ssid = AP_SSID,
-            .password = AP_PSK,
-            .max_connection = 3,
-            .beacon_interval = 100,
-        };
-
-        //strncpy((char *)ap_config.ssid, mqtt_client_id, 32);
-
-        sdk_wifi_station_set_auto_connect(false);
         sdk_wifi_softap_set_config(&ap_config);
 
         ip_addr_t first_client_ip;
